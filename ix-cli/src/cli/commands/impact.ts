@@ -9,7 +9,7 @@ import { activeReadScope, resolveFileOrReport, printResolved } from "../resolve.
 import { checkGraphHealth, graphHealthJson, graphHealthLlmFields, graphHealthProse, isUnhealthy } from "../graph-health.js";
 import { bucketByHierarchy, getSystemPath, formatSystemPath, hasMapData, type SystemPath } from "../hierarchy.js";
 import { inferRiskSemantics, humanizeLabel, type ImpactFacts, type RiskSemantics } from "../impact/risk-semantics.js";
-import { lineSpan, printJson, relativePath, rowLocation, stripNulls } from "../format.js";
+import { lineSpan, printJson, relativePath, rowLocation, sliceEdgeResults, stripNulls, truncationHint, type Slice } from "../format.js";
 import { llmLine } from "../llm.js";
 import { parsePickOption } from "../options.js";
 
@@ -23,7 +23,7 @@ export function registerImpactCommand(program: Command): void {
     .option("--path <path>", "Restrict to symbols from files matching this path substring")
     .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)", parsePickOption)
     .option("--depth <n>", "Expansion depth for callers/importers (default 1, max 3)", "1")
-    .option("--limit <n>", "Max top-impacted members to show", "10")
+    .option("--limit <n>", "Max top-impacted members (and llm caller/callee rows) to show", "10")
     .option("--format <fmt>", "Output format (text|json|llm)", "text")
     .addHelpText(
       "after",
@@ -55,7 +55,7 @@ export function registerImpactCommand(program: Command): void {
         if (CONTAINER_KINDS.has(target.kind)) {
           await containerImpact(client, target, limit, depth, opts.format, graph);
         } else {
-          await leafImpact(client, target, depth, opts.format, graph);
+          await leafImpact(client, target, depth, limit, opts.format, graph);
         }
       }
     );
@@ -478,10 +478,31 @@ async function containerImpact(
 
 // ── Leaf impact ──────────────────────────────────────────────────────────────
 
+/** One caller or callee row, located the way member rows are: `path` and `lines`. */
+export function leafRowLlm(kind: string, node: any): string {
+  const loc = rowLocation(node);
+  return llmLine(kind, [
+    ["name", node.name || node.attrs?.name || "(unnamed)"],
+    ["kind", node.kind],
+    ["path", loc.path],
+    ["lines", lineSpan(loc)],
+  ]);
+}
+
+/** The honest-cut record for a leaf list, or nothing when the list fit. */
+export function leafTruncationLlm(relation: string, slice: Slice<unknown>): string[] {
+  if (!slice.truncated) return [];
+  return [llmLine("diagnostic", [
+    ["code", "results_truncated"],
+    ["message", truncationHint(slice, relation)],
+  ])];
+}
+
 async function leafImpact(
   client: IxClient,
   target: { id: string; kind: string; name: string; resolutionMode: string; path?: string },
   depth: number,
+  limit: number,
   format: string,
   graph?: Record<string, unknown>,
 ): Promise<void> {
@@ -575,17 +596,21 @@ async function leafImpact(
       }),
     );
   } else if (format === "llm") {
-    const toRef = (kind: string) => (n: any) =>
-      llmLine(kind, [["name", n.name || n.attrs?.name || "(unnamed)"], ["kind", n.kind]]);
+    const callerSlice = sliceEdgeResults(callersResult.nodes, limit);
+    const calleeSlice = sliceEdgeResults(calleesResult.nodes, limit);
     const lines = [
       ...impactHeaderLlm(target, risk, systemPathMapped),
       llmLine("counts", [
-        ["callers", callersResult.nodes.length],
-        ["callees", calleesResult.nodes.length],
+        ["callers", callerSlice.total],
+        ["callees", calleeSlice.total],
+        ["shown_callers", callerSlice.shown],
+        ["shown_callees", calleeSlice.shown],
       ]),
       ...impactPropagationLlm(propagationBuckets, risk.flowPropagation),
-      ...callersResult.nodes.map(toRef("caller")),
-      ...calleesResult.nodes.map(toRef("callee")),
+      ...callerSlice.rows.map((n: any) => leafRowLlm("caller", n)),
+      ...calleeSlice.rows.map((n: any) => leafRowLlm("callee", n)),
+      ...leafTruncationLlm("callers", callerSlice),
+      ...leafTruncationLlm("callees", calleeSlice),
       ...impactTailLlm(risk, decisions, tasks, bugs),
     ];
     for (const line of lines) console.log(line);
