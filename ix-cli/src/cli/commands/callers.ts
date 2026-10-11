@@ -9,6 +9,7 @@ import { resolveWorkspaceRoot } from "../config.js";
 import { formatEdgeResults, printJson, relativePath, sliceEdgeResults, type Diagnostic } from "../format.js";
 import { checkGraphHealth, graphHealthProse, isUnhealthy, type GraphHealth } from "../graph-health.js";
 import { parsePickOption } from "../options.js";
+import { nextPageCommand, OFFSET_FLAG, parseOffset } from "../paging.js";
 import { activeReadScope, resolveFileOrReport, printResolved } from "../resolve.js";
 import { stderr } from "../stderr.js";
 import { llmLine } from "../llm.js";
@@ -51,11 +52,13 @@ export function registerCallersCommand(program: Command): void {
     .option("--path <path>", "Restrict to symbols from files matching this path substring")
     .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)", parsePickOption)
     .option("--limit <n>", "Max results to show", "50")
+    .option("--offset <n>", OFFSET_FLAG, "0")
     .option("--format <fmt>", "Output format (text|json|llm)", "text")
-    .addHelpText("after", "\nExamples:\n  ix callers verify_token\n  ix callers processPayment --format json\n  ix callers parse --kind method --limit 20")
-    .action(async (symbol: string, opts: { kind?: string; path?: string; pick?: number; limit: string; format: string }) => {
+    .addHelpText("after", "\nExamples:\n  ix callers verify_token\n  ix callers processPayment --format json\n  ix callers parse --kind method --limit 20\n  ix callers verify_token --offset 50")
+    .action(async (symbol: string, opts: { kind?: string; path?: string; pick?: number; limit: string; offset: string; format: string }, cmd: Command) => {
       const client = createClient();
       const limit = parseInt(opts.limit, 10);
+      const offset = parseOffset(opts.offset);
       const resolveOpts = { kind: opts.kind, path: opts.path, pick: opts.pick };
       const target = await resolveFileOrReport(client, symbol, resolveOpts, opts.format);
       if (!target) return;
@@ -73,7 +76,7 @@ export function registerCallersCommand(program: Command): void {
       const remedy = health.fix ?? "ix ingest --force --recursive .";
 
       if (result.nodes.length === 0) {
-        // Fallback to text search
+        // Fallback to text search. It shows a fixed 10 rows and ignores --offset.
         try {
           const root = resolveWorkspaceRoot();
           // The timeout bounds a search that rg could otherwise run for ever.
@@ -161,10 +164,11 @@ export function registerCallersCommand(program: Command): void {
           }
         } catch { /* ripgrep not available or no matches */ }
 
-        // Both graph and text empty
+        // Both graph and text empty (also the health-gated path: --offset does not apply).
         formatEdgeResults(sliceEdgeResults([], limit), "callers", target.name, opts.format, target, "graph", health.diagnostics);
       } else {
-        const slice = sliceEdgeResults(result.nodes, limit);
+        const slice = sliceEdgeResults(result.nodes, limit, offset);
+        if (slice.nextOffset !== undefined) slice.next = nextPageCommand(cmd, [symbol], slice.nextOffset);
         const site = await edgeTargetFor(client, target, "callers");
         formatEdgeResults({ ...slice, rows: withEdgeSites(slice.rows, "callers", site) }, "callers", target.name, opts.format, target, "graph", health.diagnostics);
       }
@@ -177,11 +181,13 @@ export function registerCallersCommand(program: Command): void {
     .option("--path <path>", "Restrict to symbols from files matching this path substring")
     .option("--pick <n>", "Pick Nth candidate from ambiguous results (1-based)", parsePickOption)
     .option("--limit <n>", "Max results to show", "50")
+    .option("--offset <n>", OFFSET_FLAG, "0")
     .option("--format <fmt>", "Output format (text|json|llm)", "text")
     .addHelpText("after", "\nExamples:\n  ix callees processPayment\n  ix callees parse --format json")
-    .action(async (symbol: string, opts: { kind?: string; path?: string; pick?: number; limit: string; format: string }) => {
+    .action(async (symbol: string, opts: { kind?: string; path?: string; pick?: number; limit: string; offset: string; format: string }, cmd: Command) => {
       const client = createClient();
       const calleeLimit = parseInt(opts.limit, 10);
+      const calleeOffset = parseOffset(opts.offset);
       const resolveOpts = { kind: opts.kind, path: opts.path, pick: opts.pick };
       const target = await resolveFileOrReport(client, symbol, resolveOpts, opts.format);
       if (!target) return;
@@ -194,7 +200,8 @@ export function registerCallersCommand(program: Command): void {
       });
       const health = await healthDiagnostics(healthCheck);
       bannerOverRows(health, opts.format, result.nodes.length);
-      const slice = sliceEdgeResults(result.nodes, calleeLimit);
+      const slice = sliceEdgeResults(result.nodes, calleeLimit, calleeOffset);
+      if (slice.nextOffset !== undefined) slice.next = nextPageCommand(cmd, [symbol], slice.nextOffset);
       const site = await edgeTargetFor(client, target, "callees");
       formatEdgeResults({ ...slice, rows: withEdgeSites(slice.rows, "callees", site) }, "callees", target.name, opts.format, target, "graph", health.diagnostics);
     });

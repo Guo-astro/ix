@@ -1,8 +1,10 @@
 // Copyright 2026 Ix Infrastructure Inc.
 
+import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 
 import { renderEdgeResultsLlm, sliceEdgeResults, sliceRanked } from "../format.js";
+import { nextPageCommand } from "../paging.js";
 import { renderInventoryLlm } from "../commands/inventory.js";
 import { scanWindow, textResultPriority } from "../commands/text.js";
 
@@ -61,8 +63,107 @@ describe("sliceEdgeResults", () => {
     const all = Array.from({ length: 212 }, (_, i) => node(`c${i}`, "src/a.ts"));
     const lines = renderEdgeResultsLlm(sliceEdgeResults(all, 50), "callers", "verify_token", "graph");
     expect(lines[1]).toBe(
-      'diagnostic code=results_truncated message="212 callers; showing 50. Raise --limit to see the rest."',
+      'diagnostic code=results_truncated next_offset=50 message="212 callers; showing 50. next: --offset 50"',
     );
+  });
+});
+
+describe("paging with --offset", () => {
+  const mixed = () => [
+    ...Array.from({ length: 70 }, (_, i) => node(`p${i}`, "src/a.ts")),
+    ...Array.from({ length: 70 }, (_, i) => node(`n${i}`)),
+    ...Array.from({ length: 72 }, (_, i) => ({ id: `${i.toString(16).padStart(8, "0")}-1111-0000-0000-000000000000`, name: "d41d8cd98f00b204e9800998ecf8427e", kind: "method" })),
+  ];
+
+  it("pages concatenate to the full ranked list with no overlap or gap", () => {
+    const all = mixed();
+    const full = sliceEdgeResults(all, Infinity).rows;
+    const got: any[] = [];
+    let offset = 0;
+    for (;;) {
+      const s = sliceEdgeResults(all, 50, offset);
+      got.push(...s.rows);
+      if (s.nextOffset === undefined) break;
+      offset = s.nextOffset;
+    }
+    expect(got).toEqual(full);
+    expect(new Set(got.map((n) => n.id)).size).toBe(212);
+  });
+
+  it("a middle page names the next offset", () => {
+    const s = sliceEdgeResults(mixed(), 50, 50);
+    expect(s).toMatchObject({ offset: 50, shown: 50, total: 212, truncated: true, nextOffset: 100 });
+    const lines = renderEdgeResultsLlm(s, "callers", "t", "graph");
+    expect(lines[0]).toBe("callers target=t offset=50 shown=50 total=212 resolved=50");
+    expect(lines[1]).toContain("next_offset=100");
+    expect(lines[1]).toContain("showing 51-100. next: --offset 100");
+  });
+
+  it("uses the caller's next command when given", () => {
+    const s = { ...sliceEdgeResults(mixed(), 50), next: "ix callers t --offset 50" };
+    expect(renderEdgeResultsLlm(s, "callers", "t", "graph")[1]).toContain("next: ix callers t --offset 50");
+  });
+
+  it("the last page has no hint", () => {
+    const s = sliceEdgeResults(mixed(), 50, 200);
+    expect(s).toMatchObject({ shown: 12, truncated: false });
+    expect(s.nextOffset).toBeUndefined();
+    const lines = renderEdgeResultsLlm(s, "callers", "t", "graph");
+    expect(lines.some((l) => l.includes("results_truncated"))).toBe(false);
+  });
+
+  it("past the end says so instead of no_edges", () => {
+    const s = sliceEdgeResults(mixed(), 50, 300);
+    expect(s).toMatchObject({ rows: [], total: 212, truncated: false });
+    const lines = renderEdgeResultsLlm(s, "callers", "t", "graph");
+    expect(lines.some((l) => l.startsWith("diagnostic code=offset_past_end"))).toBe(true);
+    expect(lines.some((l) => l.includes("no_edges"))).toBe(false);
+  });
+
+  it("--limit 0 gives no next offset and does not claim past-the-end", () => {
+    const s = sliceEdgeResults(mixed().slice(0, 5), 0);
+    expect(s).toMatchObject({ rows: [], shown: 0, total: 5, truncated: true });
+    expect(s.nextOffset).toBeUndefined();
+    const lines = renderEdgeResultsLlm(s, "callers", "t", "graph");
+    expect(lines[1]).toBe('diagnostic code=results_truncated message="5 callers; showing 0. Raise --limit to see them."');
+    expect(lines.some((l) => l.includes("offset_past_end") || l.includes("no_edges"))).toBe(false);
+  });
+
+  it("an offset with --limit 0 is not past the end while rows remain", () => {
+    const s = sliceEdgeResults(mixed(), 0, 50);
+    expect(s.nextOffset).toBeUndefined();
+    const lines = renderEdgeResultsLlm(s, "callers", "t", "graph");
+    expect(lines.some((l) => l.includes("offset_past_end"))).toBe(false);
+  });
+
+  it("leaves the header and rows alone without an offset", () => {
+    const lines = renderEdgeResultsLlm(sliceEdgeResults([node("a", "src/a.ts")], 50), "callers", "t", "graph");
+    expect(lines[0]).toBe("callers target=t shown=1 total=1 resolved=1");
+    expect(lines).toHaveLength(2);
+  });
+});
+
+describe("nextPageCommand", () => {
+  function parsed(argv: string[]): Command {
+    const cmd = new Command("callers")
+      .argument("<symbol>")
+      .option("--limit <n>", "", "50")
+      .option("--kind <kind>")
+      .option("--offset <n>", "", "0")
+      .exitOverride();
+    cmd.parse(argv, { from: "user" });
+    return cmd;
+  }
+
+  it("keeps only typed options and drops --offset", () => {
+    const cmd = parsed(["--kind", "method", "--offset", "50", "x"]);
+    expect(nextPageCommand(cmd, ["x"], 100)).toBe("ix callers --kind method --offset 100 x");
+  });
+
+  it("quotes a symbol with a space and guards a leading dash", () => {
+    const cmd = parsed(["a b"]);
+    expect(nextPageCommand(cmd, ["a b"], 50)).toBe("ix callers --offset 50 'a b'");
+    expect(nextPageCommand(cmd, ["-x"], 50)).toBe("ix callers --offset 50 -- -x");
   });
 });
 

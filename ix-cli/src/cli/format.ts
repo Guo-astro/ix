@@ -105,6 +105,12 @@ export interface Slice<T> {
   /** How many there were before the cut. */
   total: number;
   truncated: boolean;
+  /** How many ranked rows were skipped before `rows` (paging); absent means 0. */
+  offset?: number;
+  /** The `--offset` of the next page; set only when rows remain. */
+  nextOffset?: number;
+  /** The command that prints the next page, when the caller can build one. */
+  next?: string;
 }
 
 /**
@@ -123,10 +129,16 @@ export interface Slice<T> {
  * and the only claim made here is that rows the caller can act on should
  * survive the cut before rows it cannot.
  */
-export function sliceRanked<T>(all: T[], limit: number, priority?: (item: T) => number): Slice<T> {
+export function sliceRanked<T>(all: T[], limit: number, priority?: (item: T) => number, offset = 0): Slice<T> {
   const ranked = priority ? [...all].sort((a, b) => priority(a) - priority(b)) : all;
-  const rows = Number.isFinite(limit) ? ranked.slice(0, limit) : [...ranked];
-  return { rows, shown: rows.length, total: all.length, truncated: rows.length < all.length };
+  const rows = Number.isFinite(limit) ? ranked.slice(offset, offset + limit) : ranked.slice(offset);
+  const truncated = offset + rows.length < all.length;
+  const slice: Slice<T> = { rows, shown: rows.length, total: all.length, truncated };
+  if (offset > 0) slice.offset = offset;
+  // A page that printed nothing (`--limit 0`) has no next page to point at:
+  // `next_offset` would equal this offset and a caller following it would loop.
+  if (truncated && rows.length > 0) slice.nextOffset = offset + rows.length;
+  return slice;
 }
 
 /**
@@ -153,13 +165,26 @@ function edgeRowPriority(node: any): number {
  * caller a `locate` before it can be read. Neither should displace a row that
  * carries both.
  */
-export function sliceEdgeResults(nodes: any[], limit: number): Slice<any> {
-  return sliceRanked(nodes, limit, edgeRowPriority);
+export function sliceEdgeResults(nodes: any[], limit: number, offset = 0): Slice<any> {
+  return sliceRanked(nodes, limit, edgeRowPriority, offset);
 }
 
 /** What was left out, and the one flag that gets it. */
 export function truncationHint(slice: Slice<unknown>, relation: string): string {
-  return `${slice.total} ${relation}; showing ${slice.shown}. Raise --limit to see the rest.`;
+  const offset = slice.offset ?? 0;
+  const range = offset > 0 ? `${offset + 1}-${offset + slice.shown}` : `${slice.shown}`;
+  if (slice.nextOffset === undefined) return `${slice.total} ${relation}; showing ${range}. Raise --limit to see them.`;
+  const next = slice.next ?? `--offset ${slice.nextOffset}`;
+  return `${slice.total} ${relation}; showing ${range}. next: ${next}`;
+}
+
+/** The message for a page that starts at or past the end of the list. */
+function pastEndMessage(slice: Slice<unknown>, relation: string): string {
+  return `${slice.total} ${relation}; --offset ${slice.offset ?? 0} is past the end.`;
+}
+
+function isPastEnd(slice: Slice<unknown>): boolean {
+  return slice.total > 0 && (slice.offset ?? 0) >= slice.total;
 }
 
 // ── Row locations ──────────────────────────────────────────────────────────
@@ -700,6 +725,7 @@ export function renderEdgeResultsLlm(
   const unresolved = refs.filter((r) => !r.resolved).length;
   const lines = [llmLine(relation, [
     ["target", symbol],
+    ["offset", slice.offset ? slice.offset : undefined],
     ["shown", slice.shown],
     ["total", slice.total],
     ["resolved", refs.length - unresolved],
@@ -709,10 +735,13 @@ export function renderEdgeResultsLlm(
   if (slice.truncated) {
     lines.push(llmLine("diagnostic", [
       ["code", "results_truncated"],
+      ["next_offset", slice.nextOffset],
       ["message", truncationHint(slice, relation)],
     ]));
   }
-  if (refs.length === 0 && (!diagnostics || diagnostics.length === 0)) {
+  if (refs.length === 0 && isPastEnd(slice)) {
+    lines.push(llmLine("diagnostic", [["code", "offset_past_end"], ["message", pastEndMessage(slice, relation)]]));
+  } else if (refs.length === 0 && !slice.truncated && (!diagnostics || diagnostics.length === 0)) {
     lines.push(llmLine("diagnostic", [["code", "no_edges"], ["message", `No ${relation} edges found.`]]));
   }
   for (const d of diagnostics ?? []) {
@@ -783,7 +812,9 @@ export function formatEdgeResults(
       }
     }
     if (nodes.length === 0) {
-      output.diagnostics = diagnostics ?? [{ code: "no_edges", message: `No ${relation} edges found for resolved entity.` }];
+      output.diagnostics = isPastEnd(slice)
+        ? [{ code: "offset_past_end", message: pastEndMessage(slice, relation) }]
+        : diagnostics ?? (slice.truncated ? undefined : [{ code: "no_edges", message: `No ${relation} edges found for resolved entity.` }]);
     } else if (diagnostics && diagnostics.length > 0) {
       output.diagnostics = diagnostics;
     }
@@ -806,12 +837,18 @@ export function formatEdgeResults(
       resolved: results.length - unresolvedCount,
       unresolved: unresolvedCount,
       truncated: slice.truncated,
+      offset: slice.offset ?? 0,
+      ...(slice.nextOffset !== undefined ? { nextOffset: slice.nextOffset } : {}),
     };
     printJson(output);
     return;
   }
   if (nodes.length === 0) {
-    const reason = diagnostics?.[0]?.message ?? `No ${relation} found for "${symbol}".`;
+    const reason = isPastEnd(slice)
+      ? pastEndMessage(slice, relation)
+      : slice.truncated
+        ? truncationHint(slice, relation)
+        : diagnostics?.[0]?.message ?? `No ${relation} found for "${symbol}".`;
     console.log(reason);
     return;
   }
