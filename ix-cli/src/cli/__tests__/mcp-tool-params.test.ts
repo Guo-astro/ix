@@ -51,6 +51,39 @@ describe("resolving an ambiguous symbol over MCP", () => {
     ]);
   });
 
+  it("forwards --offset on ix_neighbors", async () => {
+    const { calls, runIx } = recorder();
+    const client = await connect(runIx);
+    await client.callTool({ name: "ix_neighbors", arguments: { symbol: "config", relation: "imported_by", limit: 20, offset: 50 } });
+    expect(calls).toEqual([
+      ["imported-by", "--limit=20", "--offset=50", "--format=llm", "--", "config"],
+    ]);
+  });
+
+  it("forwards --offset on the single-relation tools too", async () => {
+    // Their truncation diagnostic carries next_offset=, so each one has to be
+    // able to take it back; a hint the tool cannot act on is no hint.
+    const { calls, runIx } = recorder();
+    const client = await connect(runIx);
+    await client.callTool({ name: "ix_callers", arguments: { symbol: "config", limit: 20, offset: 50 } });
+    expect(calls).toEqual([
+      ["callers", "--limit=20", "--offset=50", "--format=llm", "--", "config"],
+    ]);
+  });
+
+  it("offers offset only on the edge tools", async () => {
+    const client = await connect(async () => ({ ok: true, stdout: "ok", stderr: "" }));
+    const tools = (await client.listTools()).tools;
+    const has = (name: string) =>
+      "offset" in (((tools.find((t) => t.name === name)!.inputSchema) as { properties?: Record<string, unknown> }).properties ?? {});
+    for (const name of ["ix_neighbors", "ix_callers", "ix_callees", "ix_imports", "ix_imported_by"]) {
+      expect(has(name), name).toBe(true);
+    }
+    for (const name of ["ix_impact", "ix_read", "ix_explain"]) {
+      expect(has(name), name).toBe(false);
+    }
+  });
+
   it("sends nothing for the flags the caller left out", async () => {
     const { calls, runIx } = recorder();
     const client = await connect(runIx);

@@ -152,6 +152,7 @@ Show methods/functions called by the given symbol (cross-file).
 | `--path` | `<path>` | — | Restrict to symbols from files matching this path substring |
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
 | `--limit` | `<n>` | `50` | Max results to show |
+| `--offset` | `<n>` | `0` | Skip the first N results (use the next: hint to page) |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
 | `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--quiet` | — | off | Drop headers, section titles and advisory hints |
@@ -167,6 +168,7 @@ Show methods/functions that call the given symbol (cross-file).
 | `--path` | `<path>` | — | Restrict to symbols from files matching this path substring |
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
 | `--limit` | `<n>` | `50` | Max results to show |
+| `--offset` | `<n>` | `0` | Skip the first N results (use the next: hint to page) |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
 | `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--quiet` | — | off | Drop headers, section titles and advisory hints |
@@ -227,6 +229,7 @@ Show members contained by the given entity (class, module, file).
 | `--path` | `<path>` | — | Restrict to symbols from files matching this path substring |
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
 | `--limit` | `<n>` | `50` | Max results to show |
+| `--offset` | `<n>` | `0` | Skip the first N results (use the next: hint to page) |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
 | `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--quiet` | — | off | Drop headers, section titles and advisory hints |
@@ -451,6 +454,7 @@ Show what imports the given entity.
 | `--path` | `<path>` | — | Restrict to symbols from files matching this path substring |
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
 | `--limit` | `<n>` | `50` | Max results to show |
+| `--offset` | `<n>` | `0` | Skip the first N results (use the next: hint to page) |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
 | `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--quiet` | — | off | Drop headers, section titles and advisory hints |
@@ -466,6 +470,7 @@ Show what the given entity imports.
 | `--path` | `<path>` | — | Restrict to symbols from files matching this path substring |
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
 | `--limit` | `<n>` | `50` | Max results to show |
+| `--offset` | `<n>` | `0` | Skip the first N results (use the next: hint to page) |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
 | `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--quiet` | — | off | Drop headers, section titles and advisory hints |

@@ -150,6 +150,17 @@ export interface Slice<T> {
   /** How many there were before the cut. */
   total: number;
   truncated: boolean;
+  /** How many ranked rows were skipped before `rows` (paging); absent means 0. */
+  offset?: number;
+  /** The `--offset` of the next page; set only when rows remain. */
+  nextOffset?: number;
+  /** The command that prints the next page, when the caller can build one. */
+  next?: string;
+  /**
+   * The server cut the list before this layer saw it, so `total` is a lower
+   * bound: more rows may exist past it, and no `--offset` can reach them.
+   */
+  capped?: boolean;
 }
 
 /**
@@ -168,10 +179,16 @@ export interface Slice<T> {
  * and the only claim made here is that rows the caller can act on should
  * survive the cut before rows it cannot.
  */
-export function sliceRanked<T>(all: T[], limit: number, priority?: (item: T) => number): Slice<T> {
+export function sliceRanked<T>(all: T[], limit: number, priority?: (item: T) => number, offset = 0): Slice<T> {
   const ranked = priority ? [...all].sort((a, b) => priority(a) - priority(b)) : all;
-  const rows = Number.isFinite(limit) ? ranked.slice(0, limit) : [...ranked];
-  return { rows, shown: rows.length, total: all.length, truncated: rows.length < all.length };
+  const rows = Number.isFinite(limit) ? ranked.slice(offset, offset + limit) : ranked.slice(offset);
+  const truncated = offset + rows.length < all.length;
+  const slice: Slice<T> = { rows, shown: rows.length, total: all.length, truncated };
+  if (offset > 0) slice.offset = offset;
+  // A page that printed nothing (`--limit 0`) has no next page to point at:
+  // `next_offset` would equal this offset and a caller following it would loop.
+  if (truncated && rows.length > 0) slice.nextOffset = offset + rows.length;
+  return slice;
 }
 
 /**
@@ -198,13 +215,77 @@ function edgeRowPriority(node: any): number {
  * caller a `locate` before it can be read. Neither should displace a row that
  * carries both.
  */
-export function sliceEdgeResults(nodes: any[], limit: number): Slice<any> {
-  return sliceRanked(nodes, limit, edgeRowPriority);
+export function sliceEdgeResults(nodes: any[], limit: number, offset = 0, capped = false): Slice<any> {
+  const slice = sliceRanked(nodes, limit, edgeRowPriority, offset);
+  if (capped) {
+    slice.capped = true;
+    // The list is not known to end here, whatever this page holds.
+    slice.truncated = true;
+  }
+  return slice;
 }
 
-/** What was left out, and the one flag that gets it. */
+/**
+ * The most edges one /v1/expand call returns. The backend clamps the request's
+ * `limit` to this (Ix-memory ArangoGraphQueryApi.expand / expandWith:
+ * `maxEdges = min(limit, 1000)`, and ExpandRoutes defaults `limit` to 1000).
+ */
+export const EXPAND_MAX_EDGES = 1000;
+
+/**
+ * Whether an expand result may have been cut by the server's edge cap. The
+ * server says so in `truncated` when it is new enough to; an older one only
+ * shows it by returning a full cap's worth of edges or nodes.
+ */
+export function expandCapped(result: { nodes?: unknown[]; edges?: unknown[]; truncated?: unknown }): boolean {
+  return result.truncated === true
+    || (result.edges?.length ?? 0) >= EXPAND_MAX_EDGES
+    || (result.nodes?.length ?? 0) >= EXPAND_MAX_EDGES;
+}
+
+/**
+ * What was left out, and the one flag that gets it.
+ *
+ * `next:` is printed only when the caller set `slice.next`: that is how a
+ * command says it takes `--offset`. `sliceRanked` sets `nextOffset` on every
+ * truncated slice, including slices cut by commands with no `--offset` (`ix
+ * impact`'s leaf rows), and pointing those at a flag they reject would send the
+ * reader into an unknown-option error.
+ */
 export function truncationHint(slice: Slice<unknown>, relation: string): string {
-  return `${slice.total} ${relation}; showing ${slice.shown}. Raise --limit to see the rest.`;
+  const offset = slice.offset ?? 0;
+  if (slice.capped) return cappedHint(slice, relation);
+  const range = offset > 0 ? `${offset + 1}-${offset + slice.shown}` : `${slice.shown}`;
+  if (slice.nextOffset === undefined || slice.next === undefined) return `${slice.total} ${relation}; showing ${range}. Raise --limit to see them.`;
+  return `${slice.total} ${relation}; showing ${range}. next: ${slice.next}`;
+}
+
+/**
+ * The hint for a list the server cut at EXPAND_MAX_EDGES: the count is a
+ * floor, and paging stops where the server's rows do.
+ */
+function cappedHint(slice: Slice<unknown>, relation: string): string {
+  const offset = slice.offset ?? 0;
+  const head = `At least ${slice.total} ${relation} (the server returns at most ${EXPAND_MAX_EDGES} edges)`;
+  if (slice.nextOffset !== undefined) {
+    const range = offset > 0 ? `${offset + 1}-${offset + slice.shown}` : `${slice.shown}`;
+    if (slice.next !== undefined) return `${head}; showing ${range}. next: ${slice.next}`;
+    return `${head}; showing ${range}. Raise --limit, or narrow the target with --kind or --path, to see the rest.`;
+  }
+  const where = slice.shown > 0
+    ? `showing ${offset > 0 ? `${offset + 1}-${offset + slice.shown}` : slice.shown}, the end of what it returned`
+    : offset > 0 ? `--offset ${offset} is beyond the rows it returned` : "showing 0";
+  return `${head}; ${where}. Narrow the target with --kind or --path to see the rest.`;
+}
+
+/** The message for a page that starts at or past the end of the list. */
+function pastEndMessage(slice: Slice<unknown>, relation: string): string {
+  return `${slice.total} ${relation}; --offset ${slice.offset ?? 0} is past the end.`;
+}
+
+function isPastEnd(slice: Slice<unknown>): boolean {
+  // A capped list has no known end, so no offset is known to be past it.
+  return !slice.capped && slice.total > 0 && (slice.offset ?? 0) >= slice.total;
 }
 
 // ── Row locations ──────────────────────────────────────────────────────────
@@ -745,6 +826,7 @@ export function renderEdgeResultsLlm(
   const unresolved = refs.filter((r) => !r.resolved).length;
   const lines = [llmLine(relation, [
     ["target", symbol],
+    ["offset", slice.offset ? slice.offset : undefined],
     ["shown", slice.shown],
     ["total", slice.total],
     ["resolved", refs.length - unresolved],
@@ -754,10 +836,13 @@ export function renderEdgeResultsLlm(
   if (slice.truncated) {
     lines.push(llmLine("diagnostic", [
       ["code", "results_truncated"],
+      ["next_offset", slice.nextOffset],
       ["message", truncationHint(slice, relation)],
     ]));
   }
-  if (refs.length === 0 && (!diagnostics || diagnostics.length === 0)) {
+  if (refs.length === 0 && isPastEnd(slice)) {
+    lines.push(llmLine("diagnostic", [["code", "offset_past_end"], ["message", pastEndMessage(slice, relation)]]));
+  } else if (refs.length === 0 && !slice.truncated && (!diagnostics || diagnostics.length === 0)) {
     lines.push(llmLine("diagnostic", [["code", "no_edges"], ["message", `No ${relation} edges found.`]]));
   }
   for (const d of diagnostics ?? []) {
@@ -828,7 +913,9 @@ export function formatEdgeResults(
       }
     }
     if (nodes.length === 0) {
-      output.diagnostics = diagnostics ?? [{ code: "no_edges", message: `No ${relation} edges found for resolved entity.` }];
+      output.diagnostics = isPastEnd(slice)
+        ? [{ code: "offset_past_end", message: pastEndMessage(slice, relation) }]
+        : diagnostics ?? (slice.truncated ? undefined : [{ code: "no_edges", message: `No ${relation} edges found for resolved entity.` }]);
     } else if (diagnostics && diagnostics.length > 0) {
       output.diagnostics = diagnostics;
     }
@@ -851,12 +938,20 @@ export function formatEdgeResults(
       resolved: results.length - unresolvedCount,
       unresolved: unresolvedCount,
       truncated: slice.truncated,
+      offset: slice.offset ?? 0,
+      ...(slice.nextOffset !== undefined ? { nextOffset: slice.nextOffset } : {}),
+      // `total` is then a lower bound: the server stopped at its edge cap.
+      ...(slice.capped ? { capped: true } : {}),
     };
     printJson(output);
     return;
   }
   if (nodes.length === 0) {
-    const reason = diagnostics?.[0]?.message ?? `No ${relation} found for "${symbol}".`;
+    const reason = isPastEnd(slice)
+      ? pastEndMessage(slice, relation)
+      : slice.truncated
+        ? truncationHint(slice, relation)
+        : diagnostics?.[0]?.message ?? `No ${relation} found for "${symbol}".`;
     console.log(reason);
     return;
   }
