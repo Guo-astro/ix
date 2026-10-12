@@ -111,7 +111,10 @@ surfaces (#575).
   the caller's order, not the renderer's. It never touches a header, and a field
   no row carries is dropped rather than emitted empty.
 - **`--pick <n>` is 1-based** everywhere it appears, and is how you resolve an
-  ambiguous target without re-running with a longer name.
+  ambiguous target without re-running with a longer name. It indexes the list
+  in stable (path, line, id) order, and also selects among the candidates of a
+  resolution notice (a target that resolved by choosing among equal matches;
+  only the true ties are listed and numbered).
 - **`--no-recursive` and `--no-open` negate a default-on behaviour**, so their
   Default of `on` is the positive behaviour, and passing the flag turns it off.
 
