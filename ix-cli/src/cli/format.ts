@@ -42,9 +42,10 @@ function jsonIndent(): number | undefined {
 
 /**
  * Notices about a guessed target (`ambiguous_target`, `fuzzy_match`) waiting for
- * the command's own json object. Per process: `ix mcp` runs every command as a
- * subprocess, so nothing outlives one command. Tests that call a command
- * in-process should call `resetResolutionNotices` between cases.
+ * the command's own json object. Module state: `ix mcp` runs commands in this
+ * process by default (see mcp/runner.ts), so its runner calls
+ * `resetResolutionNotices` before each command, and so should tests that call a
+ * command in-process.
  */
 let pendingResolutionNotices: unknown[] = [];
 
