@@ -84,9 +84,9 @@ const MAX_CONFLICTS = 10;
 const BUDGETS = [
   { key: "maxEntities", flag: "--max-entities", label: "entities", help: "Maximum entities in the bundle", min: 1, max: 500, fallback: 50 },
   { key: "maxRelationships", flag: "--max-relationships", label: "relationships", help: "Maximum relationships in the bundle", min: 1, max: 1000, fallback: 100 },
-  { key: "maxEvidence", flag: "--max-evidence", label: "evidence", help: "Maximum evidence items in the bundle; --max-tokens normally binds first", min: 1, max: 200, fallback: 200 },
-  { key: "maxTokens", flag: "--max-tokens", label: "tokens", help: "Maximum tokens of evidence output", min: 500, max: 200_000, fallback: 3_000 },
-  { key: "maxChars", flag: "--max-chars", label: "chars", help: "Maximum characters of evidence output", min: 1000, max: 1_000_000, fallback: 12_000 },
+  { key: "maxEvidence", flag: "--max-evidence", label: "evidence", help: "Maximum evidence items in the bundle", min: 1, max: 200, fallback: 25 },
+  { key: "maxTokens", flag: "--max-tokens", label: "tokens", help: "Token budget for the printed output (llm: all of it; json and text: the evidence)", min: 500, max: 200_000, fallback: 3_000 },
+  { key: "maxChars", flag: "--max-chars", label: "chars", help: "Character budget for the printed output (llm: all of it; json and text: the evidence)", min: 1000, max: 1_000_000, fallback: 12_000 },
 ] as const satisfies ReadonlyArray<{
   key: keyof BudgetSnapshot;
   flag: string;
@@ -143,17 +143,17 @@ export function bundleFormat(fmt: string | undefined): BundleFormat {
  * Characters per token, by the format the bundle is printed in.
  *
  * `--max-tokens` is charged against the text that is actually emitted, so the
- * ratio is per format. Measured with cl100k: llm 3.73 and json 2.69 on the
- * audit fixture; the constants sit just under, so a bundle comes in at or under
- * its budget. `text` measured 4.09 on a live `context.ts` bundle and shares
- * the llm value, which keeps it on the safe side.
+ * ratio is per format. Every format still uses 2.14, the value measured across
+ * 41 recorded bundles (JSON plus prompt) and the one saved investigations were
+ * sized at, so the default budget is the 6,420 characters it has always been.
+ * cl100k measured llm 3.73 and json 2.69 on the audit fixture, so 2.14 is
+ * conservative for both: a bundle comes in under its token budget, never over.
  *
- * The 2.14 this replaced was measured across 41 recorded bundles (JSON plus
- * prompt) and is the value legacy saved bundles were sized at; their stored
- * `maxChars` is kept as it is. Re-measure before raising any of these, never
- * raise one to make a bundle fit.
+ * Raising a ratio makes every default bundle larger (the ix-bench result that
+ * all expected files appear at 3,000 tokens was measured at 2.14), so it waits
+ * until that is re-measured. Never raise one to make a bundle fit.
  */
-export const CHARS_PER_TOKEN: Record<BundleFormat, number> = { llm: 3.5, json: 2.7, text: 3.5 };
+export const CHARS_PER_TOKEN: Record<BundleFormat, number> = { llm: 2.14, json: 2.14, text: 2.14 };
 
 /**
  * Apply the table's range and default to whatever the caller supplied, and
@@ -2227,10 +2227,14 @@ export function buildBundle(input: BuildInput): ContextBundle {
     if (cut.length > 0) bundle.truncation.cut = cut;
     else delete bundle.truncation.cut;
   };
+  // The llm output at the current cut, with the `next` rows looked up rather
+  // than recomputed: this is measured once per fitting step.
+  const nextAt = format === "llm" ? llmNextByCut(bundle, evidence) : undefined;
+  const llmSize = (): number => bundleLlmLines(bundle, nextAt!(bundle.evidence.length)).join("\n").length;
   let overhead = 0;
   if (format === "llm") {
     applyCut(0);
-    overhead = bundleLlmLines(bundle).join("\n").length;
+    overhead = llmSize();
   } else if (format === "text") {
     overhead = TEXT_HEADER_ESTIMATE;
   }
@@ -2247,7 +2251,7 @@ export function buildBundle(input: BuildInput): ContextBundle {
   if (format === "llm") {
     // The header digits, the bundle_truncated diagnostic and the `next` lines
     // all depend on the cut, so settle it by measuring the real output.
-    while (kept > 1 && bundleLlmLines(bundle).join("\n").length > budgets.maxChars) {
+    while (kept > 1 && llmSize() > budgets.maxChars) {
       kept -= 1;
       applyCut(kept);
     }
@@ -2259,7 +2263,7 @@ export function buildBundle(input: BuildInput): ContextBundle {
     // the nearly-complete ones do not: try the whole list before growing.
     if (kept < limit) {
       applyCut(limit);
-      if (bundleLlmLines(bundle).join("\n").length <= budgets.maxChars) {
+      if (llmSize() <= budgets.maxChars) {
         kept = limit;
       } else {
         applyCut(kept);
@@ -2267,7 +2271,7 @@ export function buildBundle(input: BuildInput): ContextBundle {
     }
     while (kept < limit) {
       applyCut(kept + 1);
-      if (bundleLlmLines(bundle).join("\n").length > budgets.maxChars) {
+      if (llmSize() > budgets.maxChars) {
         applyCut(kept);
         break;
       }
@@ -2538,10 +2542,63 @@ function issueEvidence(issue: IssueBundleInput): EvidenceItem[] {
 }
 
 /**
- * The lines `--format llm` prints, in order. Pure, so `buildBundle` can measure
- * exactly what a budget will be charged for.
+ * The `next` lines `--format llm` closes with, for the bundle's evidence as it
+ * stands. Draws only on the first few rows with a readable range; see
+ * {@link llmNextByCut}.
  */
-export function bundleLlmLines(bundle: ContextBundle): string[] {
+export function llmNextLines(bundle: ContextBundle): string[] {
+  return forMcp()
+    ? nextToolCalls(bundle).map((step) => llmLine("next", { cmd: step.cmd, why: step.why }))
+    : nextReads(bundle).map((cmd) => llmLine("next", { cmd }));
+}
+
+/**
+ * Indexes of the first `limit` evidence rows with a distinct readable range
+ * (path, start and end line), in evidence order. These are the only rows
+ * {@link nextReads} and {@link nextToolCalls} read, so the `next` lines can
+ * only change at a cut that drops one of them.
+ */
+function readableRowIndexes(evidence: EvidenceItem[], limit: number): number[] {
+  const seen = new Set<string>();
+  const out: number[] = [];
+  for (let i = 0; i < evidence.length && out.length < limit; i++) {
+    const loc = evidence[i]!.location;
+    if (!loc?.path || loc.lineStart === undefined || loc.lineEnd === undefined) continue;
+    const range = `${loc.path}:${loc.lineStart}-${loc.lineEnd}`;
+    if (seen.has(range)) continue;
+    seen.add(range);
+    out.push(i);
+  }
+  return out;
+}
+
+/**
+ * The `next` lines for every cut of `evidence`, computed once per bundle.
+ *
+ * The budget-fitting loop in `buildBundle` measures the llm output at many cut
+ * counts. Recomputing the `next` rows at each would repeat whatever they cost
+ * (a stale-row check that reads files, say) once per iteration. They only
+ * change at the cuts that drop one of the first three readable rows, so they
+ * are computed for those few prefixes, up front, and looked up by count after.
+ */
+export function llmNextByCut(bundle: ContextBundle, evidence: EvidenceItem[]): (count: number) => string[] {
+  // Each breakpoint is a prefix length at which the next lines can change.
+  const breaks = [0, ...readableRowIndexes(evidence, 3).map((i) => i + 1)];
+  const table = breaks.map((at) => llmNextLines({ ...bundle, evidence: evidence.slice(0, at) }));
+  return (count) => {
+    let k = 0;
+    while (k + 1 < breaks.length && breaks[k + 1]! <= count) k += 1;
+    return table[k]!;
+  };
+}
+
+/**
+ * The lines `--format llm` prints, in order. Pure, so `buildBundle` can measure
+ * exactly what a budget will be charged for. `next` is the closing lines when
+ * the caller already has them (`buildBundle` takes them from
+ * {@link llmNextByCut}); otherwise they are computed from the bundle.
+ */
+export function bundleLlmLines(bundle: ContextBundle, next: string[] = llmNextLines(bundle)): string[] {
   // Every line through `llmLine`, none through a template literal: see the
   // history of this block. Absent sections are null and filtered out.
   const lines: Array<string | null> = [
@@ -2589,9 +2646,7 @@ export function bundleLlmLines(bundle: ContextBundle): string[] {
       // `--format json` carries the rest for a caller that wants it.
       ...bundle.evidence.map(evidenceRecord(undefined)),
       // Last, so it reads as the closing instruction it is.
-      ...(forMcp()
-        ? nextToolCalls(bundle).map((step) => llmLine("next", { cmd: step.cmd, why: step.why }))
-        : nextReads(bundle).map((cmd) => llmLine("next", { cmd }))),
+      ...next,
   ];
   return lines.filter((line): line is string => line !== null);
 }

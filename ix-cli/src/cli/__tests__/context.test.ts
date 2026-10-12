@@ -14,7 +14,8 @@ import type {
 } from "../../client/types.js";
 import type { EntityFacts } from "../explain/facts.js";
 import {
-  buildBundle, bundleFormat, clampBudgets, renderBundle, sanitizeId, textEvidenceLines,
+  buildBundle, bundleFormat, bundleLlmLines, clampBudgets, llmNextByCut, llmNextLines, renderBundle, sanitizeId,
+  textEvidenceLines,
 } from "../commands/context.js";
 
 function makeFacts(overrides: Partial<EntityFacts> = {}): EntityFacts {
@@ -459,6 +460,19 @@ describe("ix context budget is charged against the emitted text", () => {
     return { ...input(), facts, context: makeContext({ nodes, edges }) };
   };
 
+  // Members with ranges, two sharing one, and some without: the shapes the
+  // `next` rows skip or dedupe.
+  const readableMembers = () => {
+    const memberRefs = Array.from({ length: 12 }, (_, i) => ({
+      id: `m-${i}`, name: `member_${i}`, kind: "function", path: "src/widget.ts",
+      ...(i % 3 === 1 ? {} : { lineStart: i < 2 ? 10 : 10 + i * 20, lineEnd: i < 2 ? 20 : 20 + i * 20 }),
+    }));
+    const facts = makeFacts({
+      path: "src/widget.ts", memberRefs, members: memberRefs.map((m) => m.name), memberCount: memberRefs.length,
+    });
+    return { ...input(), facts };
+  };
+
   const emitted = (bundle: ReturnType<typeof buildBundle>, format: string): string => {
     const lines: string[] = [];
     const orig = console.log;
@@ -491,25 +505,59 @@ describe("ix context budget is charged against the emitted text", () => {
     });
   }
 
-  // Every budget in a sweep, so some settle within a few characters of
-  // maxChars: the header's `truncated_chars` digits must be the ones measured,
-  // not a placeholder that grows after the fit was checked.
+  // A sample of budgets, each probed at its own boundary: the output it
+  // settled at, and one character under. Landing exactly on maxChars is where
+  // a `truncated_chars` placeholder that grows after the fit was checked would
+  // overrun, so each sample tests the tightest budgets rather than hoping a
+  // dense sweep lands on them. Every 25th value keeps this to ~120 builds.
   it("never emits past maxChars in llm once the truncated_chars header is final", () => {
     delete process.env.IX_CALLER;
-    const base = clampBudgets({}, "llm");
-    let cut = 0;
-    for (let maxChars = 1500; maxChars <= 2500; maxChars += 1) {
-      const budgets = { ...base, maxChars };
-      const bundle = buildBundle({ ...manyMembers(), budgets, format: "llm" });
-      if (bundle.truncation.evidenceTruncated > 0) cut += 1;
+    const base = clampBudgets({ maxEvidence: 200 }, "llm");
+    const build = (maxChars: number) => {
+      const bundle = buildBundle({ ...manyMembers(), budgets: { ...base, maxChars }, format: "llm" });
+      expect(bundle.truncation.evidenceTruncated, `cut at ${maxChars}`).toBeGreaterThan(0);
       expect(bundle.truncation.charactersTruncated).toBeGreaterThan(0);
-      expect(emitted(bundle, "llm").length).toBeLessThanOrEqual(maxChars);
+      const out = emitted(bundle, "llm").length;
+      expect(out, `emitted at maxChars=${maxChars}`).toBeLessThanOrEqual(maxChars);
+      return { bundle, out };
+    };
+    let samples = 0;
+    for (let maxChars = 1500; maxChars <= 2500; maxChars += 25) {
+      const { bundle, out } = build(maxChars);
+      // Exactly at the size it settled at, it keeps the same rows.
+      expect(build(out).bundle.evidence.length).toBe(bundle.evidence.length);
+      // One under, it must drop a row rather than overrun.
+      build(out - 1);
+      samples += 1;
     }
-    expect(cut).toBe(1001);
+    expect(samples).toBe(41);
   });
 
+  // The fitting loop measures the llm output at many cuts with the `next`
+  // rows looked up, not recomputed (#834 makes them read files). The lookup
+  // must give the lines a fresh computation would at every cut, or the size
+  // measured is not the size printed.
+  for (const caller of [undefined, "mcp"]) {
+    it(`looks up the same next lines a fresh computation gives, at every cut (IX_CALLER=${caller ?? "unset"})`, () => {
+      if (caller) process.env.IX_CALLER = caller;
+      else delete process.env.IX_CALLER;
+      const big = clampBudgets({ maxChars: 100000, maxEvidence: 200 }, "llm");
+      const bundle = buildBundle({ ...readableMembers(), budgets: big, format: "llm" });
+      const evidence = bundle.evidence;
+      // Rows without a range and rows repeating one are in the list, so the
+      // breakpoints are not simply the first three rows.
+      expect(evidence.filter((e) => e.location?.lineStart === undefined).length).toBeGreaterThan(0);
+      const nextAt = llmNextByCut(bundle, evidence);
+      for (let count = 0; count <= evidence.length; count++) {
+        const prefix = { ...bundle, evidence: evidence.slice(0, count) };
+        expect(nextAt(count), `cut at ${count}`).toEqual(llmNextLines(prefix));
+        expect(bundleLlmLines(prefix, nextAt(count))).toEqual(bundleLlmLines(prefix));
+      }
+    });
+  }
+
   it("keeps every row when the whole bundle fits exactly (no reserved diagnostic)", () => {
-    const big = clampBudgets({ maxChars: 100000 }, "llm");
+    const big = clampBudgets({ maxChars: 100000, maxEvidence: 200 }, "llm");
     const full = buildBundle({ ...manyMembers(), budgets: big, format: "llm" });
     expect(full.truncation.evidenceTruncated).toBe(0);
     const exact = emitted(full, "llm").length;
@@ -549,7 +597,7 @@ describe("ix context budget is charged against the emitted text", () => {
   });
 
   it("reports charactersTruncated as full minus kept in the format's own unit", () => {
-    const budgets = clampBudgets({ maxTokens: 600 }, "json");
+    const budgets = clampBudgets({ maxTokens: 600, maxEvidence: 200 }, "json");
     const cut = buildBundle({ ...manyMembers(), budgets, format: "json" });
     const wide = buildBundle({
       ...manyMembers(), format: "json", budgets: { ...budgets, maxChars: 1_000_000 },
