@@ -457,9 +457,11 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
       kind: SYMBOL_TOOL_INPUT.kind,
       path: SYMBOL_TOOL_INPUT.path,
       pick: SYMBOL_TOOL_INPUT.pick,
+      // Caps the top-impacted members and the leaf caller/callee rows. The CLI
+      // default is 10, so the hint's "Raise --limit" needs this to be reachable.
+      limit: z.number().int().min(0).max(500).optional(),
     },
-    async (input) =>
-      runFormatted(runIx, "ix_impact", ix("impact", [stringArg(input, "target")], symbolOptions(input, { limit: false }))),
+    async (input) => runFormatted(runIx, "ix_impact", ix("impact", [stringArg(input, "target")], symbolOptions(input))),
   );
   registerTool(
     ctx,

@@ -38,9 +38,54 @@ function jsonIndent(): number | undefined {
   return process.stdout.isTTY ? 2 : undefined;
 }
 
+// ── Resolution notices ─────────────────────────────────────────────────────
+
+/**
+ * Notices about a guessed target (`ambiguous_target`, `fuzzy_match`) waiting for
+ * the command's own json object. Module state: `ix mcp` runs commands in this
+ * process by default (see mcp/runner.ts), so its runner calls
+ * `resetResolutionNotices` before each command, and so should tests that call a
+ * command in-process.
+ */
+let pendingResolutionNotices: unknown[] = [];
+
+/** Queue notices for the next `printJson`. */
+export function noteResolutionNotices(list: readonly unknown[]): void {
+  pendingResolutionNotices.push(...list);
+}
+
+export function takeResolutionNotices(): unknown[] {
+  const taken = pendingResolutionNotices;
+  pendingResolutionNotices = [];
+  return taken;
+}
+
+export function resetResolutionNotices(): void {
+  pendingResolutionNotices = [];
+}
+
+/**
+ * Merge pending notices into a plain object that is not an error record.
+ * Anything else (an array, a scalar, an `{error}`) is printed untouched and the
+ * notices are dropped: an error is its own answer, and the exit code is the same.
+ */
+function withResolutionNotices(value: unknown): unknown {
+  const notices = takeResolutionNotices();
+  if (notices.length === 0) return value;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return value;
+  const obj = value as Record<string, unknown>;
+  if (typeof obj.error === "string") return value;
+  const fuzzy = notices.some((n) => (n as { code?: string })?.code === "fuzzy_match");
+  return {
+    ...obj,
+    ...(fuzzy && obj.resolutionMode === undefined ? { resolutionMode: "fuzzy" } : {}),
+    resolutionNotices: notices,
+  };
+}
+
 /** Print a JSON payload on stdout, indented only when that helps someone. */
 export function printJson(value: unknown): void {
-  console.log(JSON.stringify(value, null, jsonIndent()));
+  console.log(JSON.stringify(withResolutionNotices(value), null, jsonIndent()));
 }
 
 // ── JSON optimization helpers ──────────────────────────────────────────────

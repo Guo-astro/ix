@@ -130,6 +130,22 @@ describe("resolving an ambiguous symbol over MCP", () => {
   });
 });
 
+describe("ix_impact limit", () => {
+  it("forwards limit as --limit, so the CLI's 'Raise --limit' hint can be acted on", async () => {
+    const { calls, runIx } = recorder();
+    const client = await connect(runIx);
+    await client.callTool({ name: "ix_impact", arguments: { target: "verify", limit: 25 } });
+    expect(calls).toEqual([["impact", "--limit=25", "--format=llm", "--", "verify"]]);
+  });
+
+  it("leaves argv unchanged when limit is omitted", async () => {
+    const { calls, runIx } = recorder();
+    const client = await connect(runIx);
+    await client.callTool({ name: "ix_impact", arguments: { target: "verify" } });
+    expect(calls).toEqual([["impact", "--format=llm", "--", "verify"]]);
+  });
+});
+
 describe("ix_search", () => {
   it("exists at all, which is the point", async () => {
     const client = await connect(async () => ({ ok: true, stdout: "ok", stderr: "" }));
