@@ -111,7 +111,10 @@ surfaces (#575).
   the caller's order, not the renderer's. It never touches a header, and a field
   no row carries is dropped rather than emitted empty.
 - **`--pick <n>` is 1-based** everywhere it appears, and is how you resolve an
-  ambiguous target without re-running with a longer name.
+  ambiguous target without re-running with a longer name. It indexes the list
+  in stable (path, line, id) order, and also selects among the candidates of a
+  resolution notice (a target that resolved by choosing among equal matches;
+  only the true ties are listed and numbered).
 - **`--no-recursive` and `--no-open` negate a default-on behaviour**, so their
   Default of `on` is the positive behaviour, and passing the flag turns it off.
 
@@ -149,6 +152,7 @@ Show methods/functions called by the given symbol (cross-file).
 | `--path` | `<path>` | — | Restrict to symbols from files matching this path substring |
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
 | `--limit` | `<n>` | `50` | Max results to show |
+| `--offset` | `<n>` | `0` | Skip the first N results (use the next: hint to page) |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
 | `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--quiet` | — | off | Drop headers, section titles and advisory hints |
@@ -164,6 +168,7 @@ Show methods/functions that call the given symbol (cross-file).
 | `--path` | `<path>` | — | Restrict to symbols from files matching this path substring |
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
 | `--limit` | `<n>` | `50` | Max results to show |
+| `--offset` | `<n>` | `0` | Skip the first N results (use the next: hint to page) |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
 | `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--quiet` | — | off | Drop headers, section titles and advisory hints |
@@ -224,6 +229,7 @@ Show members contained by the given entity (class, module, file).
 | `--path` | `<path>` | — | Restrict to symbols from files matching this path substring |
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
 | `--limit` | `<n>` | `50` | Max results to show |
+| `--offset` | `<n>` | `0` | Skip the first N results (use the next: hint to page) |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
 | `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--quiet` | — | off | Drop headers, section titles and advisory hints |
@@ -448,6 +454,7 @@ Show what imports the given entity.
 | `--path` | `<path>` | — | Restrict to symbols from files matching this path substring |
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
 | `--limit` | `<n>` | `50` | Max results to show |
+| `--offset` | `<n>` | `0` | Skip the first N results (use the next: hint to page) |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
 | `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--quiet` | — | off | Drop headers, section titles and advisory hints |
@@ -463,6 +470,7 @@ Show what the given entity imports.
 | `--path` | `<path>` | — | Restrict to symbols from files matching this path substring |
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
 | `--limit` | `<n>` | `50` | Max results to show |
+| `--offset` | `<n>` | `0` | Skip the first N results (use the next: hint to page) |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
 | `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--quiet` | — | off | Drop headers, section titles and advisory hints |
@@ -505,6 +513,7 @@ List entities by kind with optional path scoping.
 | `--kind` | `<kind>` | — | Entity kind to list (class, method, function, file, module, etc.) |
 | `--path` | `<path>` | — | Filter by source file path substring |
 | `--limit` | `<n>` | `50` | Max results |
+| `--offset` | `<n>` | `0` | Skip the first N results (use the next: hint to page) |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
 | `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--quiet` | — | off | Drop headers, section titles and advisory hints |
@@ -779,6 +788,7 @@ Fast lexical/text search across the codebase (uses ripgrep).
 | Flag | Value | Default | Effect |
 |---|---|---|---|
 | `--limit` | `<n>` | `20` | Max results |
+| `--offset` | `<n>` | `0` | Skip the first N results (use the next: hint to page) |
 | `--path` | `<dir>` | `.` | Restrict search to a workspace-relative directory |
 | `--language` | `<lang>` | — | Filter by language (python, typescript, scala, etc.) |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
