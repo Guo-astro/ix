@@ -76,10 +76,45 @@ which value it ignored, on stderr, when a person is there to read it.
   maps it.
   An ambiguous graph target is instead `ambiguous_target`, includes numbered
   candidates, and exits non-zero because the requested graph operation could
-  not choose a target. (The
+  not choose a target. The error also carries `shown=<n> total=<m>` after
+  `count=` (and `truncated=true` when the search window came back full, so
+  `total` is a lower bound); json has `total` and `truncated` beside
+  `candidates`. Candidates are numbered in (path, line, id) order, so
+  `--pick <n>` means the same thing on every run. (The
   backend spells a missing target `unknown_target` in its own JSON bodies; that
   is a wire detail and is translated on the way out, so a consumer never sees
   both.)
+
+### Resolution notices (exit 0)
+
+When a target resolves by choosing among equal candidates, or by a fuzzy match,
+the command still succeeds. It says so with `diagnostic` records, never an
+`error` record, printed before the command's own first record (so before a
+`context` header):
+
+```
+diagnostic code=ambiguous_target target=index.ts chosen=index.ts shown=3 total=3 message="..."
+candidate n=1 name=index.ts kind=file path=packages/a/src/index.ts id=1111aaaa
+candidate n=2 name=index.ts kind=file path=packages/b/src/index.ts id=2222bbbb
+hint text="Use --pick <n> or --path to choose another."
+```
+
+The candidates are only the true ties: the ones that scored the same as the
+chosen target. `shown=`, `total=` and `--pick <n>` all count that same list.
+Candidates that scored close but lower are not listed as equal; the message
+only counts them ("2 more scored lower and are not listed"). `--pick <n>`
+selects among the listed candidates; an out-of-range pick keeps the
+default and adds a `pick_out_of_range` diagnostic, still exiting 0.
+
+`Class.method` and `Class#method` resolve only to a member of that class: one
+of the class's `CONTAINS` children in the graph or, when the graph has none
+for it, a symbol in the class's own source file (the same path, not a
+substring of it). A same-named method elsewhere is not returned; the target is
+a miss instead. A match on
+a name that is not an exact one is `diagnostic code=fuzzy_match
+resolution=fuzzy ...`, and json carries `resolutionMode: "fuzzy"`. In json the
+notices are a top-level `resolutionNotices` array merged into the command's
+object; an `{error}` record never carries one.
 
 ## Graph health
 
