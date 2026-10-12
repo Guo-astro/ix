@@ -1003,9 +1003,14 @@ function camelToSnake(s: string): string {
  * the `Class.method` / `Class#method` spellings (JS, Java, Python docs).
  * Splits on the *last* separator so nested scopes like `ns::Class::method`
  * resolve to `{ className: "ns::Class", methodName: "method" }`. `.` and `#`
- * need identifier parts on both sides and a target that is not a file name.
+ * need identifier parts on both sides and a target that is not a file name;
+ * `allowFileName` lifts the last rule, for `Response.json` once no file of
+ * that name is found.
  */
-function parseScopedSymbol(symbol: string): { className: string; methodName: string; sep: "::" | "." | "#" } | null {
+function parseScopedSymbol(
+  symbol: string,
+  allowFileName = false,
+): { className: string; methodName: string; sep: "::" | "." | "#" } | null {
   const idx = symbol.lastIndexOf('::');
   if (idx >= 1) {
     const className = symbol.slice(0, idx);
@@ -1013,7 +1018,7 @@ function parseScopedSymbol(symbol: string): { className: string; methodName: str
     if (className && methodName) return { className, methodName, sep: "::" };
     return null;
   }
-  if (looksFileLike(symbol)) return null;
+  if (!allowFileName && looksFileLike(symbol)) return null;
   const at = Math.max(symbol.lastIndexOf('#'), symbol.lastIndexOf('.'));
   if (at < 1) return null;
   const className = symbol.slice(0, at);
@@ -1104,6 +1109,17 @@ export async function resolveFileOrEntityFull(
   // 2. File-like input → try graph file search
   if (looksFileLike(target)) {
     const fileResult = await tryFileGraphMatch(client, target, opts);
+    // `Response.json`, `Template.html`, `Tree.go`: a method name can end in a
+    // file extension. When no file has exactly that name, the qualified
+    // reading is tried before a weaker file match or a miss; a file that has
+    // the name still wins.
+    const dotted = /[\\/]/.test(target) ? null : parseScopedSymbol(target, true);
+    const namesFile = fileResult?.resolved && fileResult.entity.name.toLowerCase() === target.toLowerCase();
+    if (fileResult && (!dotted || namesFile)) return fileResult;
+    if (dotted) {
+      const qualified = await resolveQualified(client, dotted, opts, true);
+      if (qualified?.resolved) return qualified;
+    }
     if (fileResult) return fileResult;
     // Fall through to symbol resolution
   }
@@ -1484,7 +1500,9 @@ export async function resolveFileOrReport(
  *               filename inside --path
  *   quality: 1  a path suffix on a '/' boundary (`src/index.ts` in `pkg/src/index.ts`)
  *   quality: 2  a suffix not on a boundary (`li/config.ts`): kept so a path
- *               that names one file is not sent to the file miss
+ *               that names one file is not sent to the file miss, but
+ *               labelled fuzzy with a fuzzy_match notice (`site/package.json`
+ *               is not `docs-site/package.json`)
  *   quality: 3  the exact filename
  *   quality: 4  the filename without its extension
  * Within a tier, the shortest uri, then uri, then id. It never returns
@@ -1526,11 +1544,11 @@ async function tryFileGraphMatch(
     catch { fromCwd = ""; }
   }
 
-  const matches: Array<{ node: any; quality: number; uri: string }> = [];
+  const matches: Array<{ node: any; quality: number; uri: string; fuzzy?: boolean }> = [];
   for (const n of nodes as any[]) {
     const name = (n.name || "").toLowerCase();
     const uri = normalizeForPathMatch(n.provenance?.sourceUri ?? n.provenance?.source_uri ?? "");
-    const add = (quality: number) => { matches.push({ node: n, quality, uri }); };
+    const add = (quality: number, fuzzy = false) => { matches.push({ node: n, quality, uri, fuzzy }); };
 
     if (targetHasPath && (uri === targetLower || (fromCwd && uri === fromCwd))) {
       add(0);
@@ -1546,8 +1564,9 @@ async function tryFileGraphMatch(
       add(1);
     }
     // Suffix that is not on a boundary
+    // (a target longer than the uri, ending in it on a boundary, is not fuzzy)
     else if (targetHasPath && (uri.endsWith(targetLower) || (uri.includes("/") && targetLower.endsWith(uri)))) {
-      add(2);
+      add(2, !targetLower.endsWith("/" + uri));
     }
     // Exact filename match
     else if (name === basenameLower) {
@@ -1587,12 +1606,17 @@ async function tryFileGraphMatch(
     tied.push(m);
   }
   const entityOf = (m: typeof best, mode: ResolutionMode) => nodeToResolved(m.node, m.node.name || basename, mode);
+  const fuzzy = !!best.fuzzy;
   if (tied.length <= 1) {
+    if (fuzzy) {
+      const entity = entityOf(best, "fuzzy");
+      return { resolved: true, entity, notices: [fuzzyNotice(target, entity)] };
+    }
     return { resolved: true, entity: entityOf(best, best.quality === 0 ? "exact" : "scored") };
   }
   const truncated = nodes.length >= limit;
   const amb = buildAmbiguous(tied.map((m) => m.node), undefined, { total: tied.length, truncated });
-  const chosen = entityOf(best, "scored");
+  const chosen = entityOf(best, fuzzy ? "fuzzy" : "scored");
   const notice: ResolutionNotice = {
     code: "ambiguous_target",
     target,
@@ -1602,5 +1626,6 @@ async function tryFileGraphMatch(
     total: tied.length,
     ...(truncated ? { truncated: true } : {}),
   };
-  return pickFromNotice({ resolved: true, entity: chosen, notices: [notice] }, opts);
+  const notices = fuzzy ? [notice, fuzzyNotice(target, chosen)] : [notice];
+  return pickFromNotice({ resolved: true, entity: chosen, notices }, opts);
 }

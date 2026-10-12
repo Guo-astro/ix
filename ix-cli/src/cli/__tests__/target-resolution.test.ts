@@ -150,6 +150,47 @@ describe("acceptance 3: a suffix stops at a path segment", () => {
   });
 });
 
+describe("a suffix not on a '/' boundary is labelled fuzzy (review round 5)", () => {
+  const nodes = [file("docs-site/package.json"), file("package.json")];
+
+  it("site/package.json resolves to docs-site/package.json as fuzzy, with a fuzzy_match notice, exit 0", async () => {
+    const [a, b] = await inBothOrders(nodes, (c) => full(c, "site/package.json"));
+    for (const r of [a, b]) {
+      expect(r.resolved && r.entity.path).toBe("docs-site/package.json");
+      expect(r.resolved && r.entity.resolutionMode).toBe("fuzzy");
+      expect(r.resolved && r.notices?.map((n) => n.code)).toEqual(["fuzzy_match"]);
+    }
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("a suffix on a boundary stays scored with no notice", async () => {
+    const deeper = [file("apps/docs-site/package.json"), file("package.json")];
+    const [a, b] = await inBothOrders(deeper, (c) => full(c, "docs-site/package.json"));
+    for (const r of [a, b]) {
+      expect(r.resolved && r.entity.path).toBe("apps/docs-site/package.json");
+      expect(r.resolved && r.entity.resolutionMode).toBe("scored");
+      expect(r.resolved && r.notices).toBeUndefined();
+    }
+  });
+
+  it("a longer path ending in the uri on a boundary is not fuzzy", async () => {
+    const r = await full(client(nodes), "repo/docs-site/package.json");
+    expect(r.resolved && r.entity.path).toBe("docs-site/package.json");
+    expect(r.resolved && r.entity.resolutionMode).not.toBe("fuzzy");
+    expect(r.resolved && r.notices).toBeUndefined();
+  });
+
+  it("a non-boundary tie keeps the ambiguous_target notice and adds fuzzy_match", async () => {
+    const tie = [file("a-site/package.json"), file("b-site/package.json")];
+    const [a, b] = await inBothOrders(tie, (c) => full(c, "site/package.json"));
+    for (const r of [a, b]) {
+      expect(r.resolved && r.entity.path).toBe("a-site/package.json");
+      expect(r.resolved && r.entity.resolutionMode).toBe("fuzzy");
+      expect(r.resolved && r.notices?.map((n) => n.code)).toEqual(["ambiguous_target", "fuzzy_match"]);
+    }
+  });
+});
+
 describe("acceptance 4: two functions named render stay ambiguous (exit 1)", () => {
   const nodes = [node("r2", "render", "function", "src/z.ts", 5), node("r1", "render", "function", "src/a.ts", 9)];
 
@@ -439,6 +480,46 @@ describe("a fuzzy literal hit does not hide the qualified reading", () => {
     const r = await full(client(nodes), "Config.load");
     expect(r.resolved && r.entity.id).toBe("entry");
     expect(r.resolved && r.entity.resolutionMode).toBe("fuzzy");
+  });
+});
+
+describe("a method whose name ends in a file extension (review round 5)", () => {
+  for (const [cls, method] of [["Response", "json"], ["Template", "html"], ["Tree", "go"]]) {
+    const target = `${cls}.${method}`;
+
+    it(`${target} with no such file resolves to the class member`, async () => {
+      const nodes = [
+        node("cls", cls, "class", `src/${cls.toLowerCase()}.ts`, 1),
+        node("m", method, "method", `src/${cls.toLowerCase()}.ts`, 10),
+        node("other", method, "method", "src/other.ts", 10),
+      ];
+      const [a, b] = await inBothOrders(nodes, (c) => full(c, target));
+      for (const r of [a, b]) {
+        expect(r.resolved && r.entity.id).toBe("m");
+        expect(r.resolved && r.entity.name).toBe(target);
+      }
+      expect(process.exitCode).toBeUndefined();
+    });
+
+    it(`${target} is still the file when a file has that name`, async () => {
+      const nodes = [
+        file(`assets/${target}`),
+        node("cls", cls, "class", `src/${cls.toLowerCase()}.ts`, 1),
+        node("m", method, "method", `src/${cls.toLowerCase()}.ts`, 10),
+      ];
+      const [a, b] = await inBothOrders(nodes, (c) => full(c, target));
+      for (const r of [a, b]) {
+        expect(r.resolved && r.entity.kind).toBe("file");
+        expect(r.resolved && r.entity.path).toBe(`assets/${target}`);
+      }
+    });
+  }
+
+  it("with neither the file nor the member it is still a file miss", async () => {
+    const nodes = [node("cls", "Response", "class", "src/response.ts", 1)];
+    const r = await full(client(nodes), "Response.json");
+    expect(r.resolved).toBe(false);
+    expect(!r.resolved && !r.ambiguous && r.reason).toBe("file_not_found");
   });
 });
 

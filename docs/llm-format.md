@@ -109,10 +109,16 @@ default and adds a `pick_out_of_range` diagnostic, still exiting 0.
 `Class.method` and `Class#method` resolve only to a member of that class: one
 of the class's `CONTAINS` children in the graph or, when the graph has none
 for it, a symbol in the class's own source file (the same path, not a
-substring of it). A same-named method elsewhere is not returned; the target is
-a miss instead. A match on
-a name that is not an exact one is `diagnostic code=fuzzy_match
-resolution=fuzzy ...`, and json carries `resolutionMode: "fuzzy"`. In json the
+substring of it). A same-named method elsewhere is not returned: the target is
+a miss instead, unless the name as typed matches something fuzzily, which
+resolves as a fuzzy match (exit 0). A name whose last part is a file extension
+(`Response.json`, `Template.html`, `Tree.go`) is a file when a file has exactly
+that name, and otherwise gets the same class-member reading.
+
+A match on a name that is not an exact one, or a path that ends in the target
+without a `/` before it (`site/package.json` matching `docs-site/package.json`),
+is `diagnostic code=fuzzy_match resolution=fuzzy ...`, and json carries
+`resolutionMode: "fuzzy"`. In json the
 notices are a top-level `resolutionNotices` array merged into the command's
 object; an `{error}` record never carries one.
 
