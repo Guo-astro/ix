@@ -270,11 +270,13 @@ behavior text="Token validation across the request pipeline"
 counts callers=14 callees=3 shown_callers=10 shown_callees=3
 bucket region="Auth Layer" kind=subsystem count=9
 caller name=handleLogin kind=method path=src/auth/login.ts lines=20-48
-diagnostic code=results_truncated message="14 callers; showing 10. Raise --limit to see the rest."
+diagnostic code=results_truncated message="14 callers; showing 10. Raise --limit to see them, or page them with ix callers verify_token"
 ```
 
 `callers` and `callees` are the true totals; `shown_callers` and `shown_callees` are the rows
 printed after the `--limit` cut (the two lists share one header, so `shown`/`total` are split by list).
+`ix impact` has no `--offset`, so its truncation diagnostic carries no `next_offset=`; it points at
+`ix callers`/`ix callees` (over MCP, `ix_neighbors`), which page.
 
 `ix overview <container>`:
 

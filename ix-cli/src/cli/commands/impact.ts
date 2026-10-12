@@ -9,7 +9,8 @@ import { activeReadScope, resolveFileOrReport, printResolved } from "../resolve.
 import { checkGraphHealth, graphHealthJson, graphHealthLlmFields, graphHealthProse, isUnhealthy } from "../graph-health.js";
 import { bucketByHierarchy, getSystemPath, formatSystemPath, hasMapData, type SystemPath } from "../hierarchy.js";
 import { inferRiskSemantics, humanizeLabel, type ImpactFacts, type RiskSemantics } from "../impact/risk-semantics.js";
-import { lineSpan, printJson, relativePath, rowLocation, sliceEdgeResults, stripNulls, truncationHint, type Slice } from "../format.js";
+import { lineSpan, printJson, relativePath, rowLocation, sliceEdgeResults, stripNulls, type Slice } from "../format.js";
+import { forMcp, suggest, type Relation } from "../next-step.js";
 import { llmLine } from "../llm.js";
 import { parsePickOption } from "../options.js";
 
@@ -489,12 +490,24 @@ export function leafRowLlm(kind: string, node: any): string {
   ]);
 }
 
-/** The honest-cut record for a leaf list, or nothing when the list fit. */
-export function leafTruncationLlm(relation: string, slice: Slice<unknown>): string[] {
+/**
+ * The honest-cut record for a leaf list, or nothing when the list fit.
+ *
+ * Its own message, not `truncationHint`: `ix impact` has no `--offset`, so it
+ * must never print a `next:` page or a `next_offset`, whatever the shared
+ * slice helpers grow. The rest of the list is one `--limit` away, or pageable
+ * through the edge command for the same relation.
+ */
+export function leafTruncationLlm(relation: Relation, slice: Slice<unknown>, target: string): string[] {
   if (!slice.truncated) return [];
+  const head = `${slice.total} ${relation}; showing ${slice.shown}.`;
+  const page = suggest.neighbors(target, relation);
+  const message = forMcp()
+    ? `${head} To page them: ${page}`
+    : `${head} Raise --limit to see them, or page them with ${page}`;
   return [llmLine("diagnostic", [
     ["code", "results_truncated"],
-    ["message", truncationHint(slice, relation)],
+    ["message", message],
   ])];
 }
 
@@ -609,8 +622,8 @@ async function leafImpact(
       ...impactPropagationLlm(propagationBuckets, risk.flowPropagation),
       ...callerSlice.rows.map((n: any) => leafRowLlm("caller", n)),
       ...calleeSlice.rows.map((n: any) => leafRowLlm("callee", n)),
-      ...leafTruncationLlm("callers", callerSlice),
-      ...leafTruncationLlm("callees", calleeSlice),
+      ...leafTruncationLlm("callers", callerSlice, target.name),
+      ...leafTruncationLlm("callees", calleeSlice, target.name),
       ...impactTailLlm(risk, decisions, tasks, bugs),
     ];
     for (const line of lines) console.log(line);
