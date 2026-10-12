@@ -21,6 +21,66 @@ import { currentRunSignal } from "../../client/run-signal.js";
 type RunRipgrep = (args: string[], limit: number) => Promise<{ stdout: string; matched?: number; capped?: boolean }>;
 
 /**
+ * Max characters of context kept in one `ix text` snippet. A single minified
+ * bundle or lockfile line can be tens of KB; one row must never flood the
+ * agent's context. The match itself stays whole (up to this same cap).
+ */
+export const SNIPPET_MAX_CHARS = 200;
+
+/**
+ * Trim a ripgrep line to a window of about `cap` characters around the first
+ * submatch, with `…` on each cut side. Lines at or under the cap are returned
+ * unchanged. `submatches` carry UTF-8 byte offsets (rg JSON), not string indices.
+ * A match longer than the cap keeps its first `cap` characters plus `…`.
+ */
+export function clipSnippet(
+  text: string,
+  submatches?: Array<{ start?: number; end?: number }>,
+  cap = SNIPPET_MAX_CHARS,
+): string {
+  const eol = /\r?\n$/.exec(text)?.[0] ?? "";
+  const body = eol ? text.slice(0, text.length - eol.length) : text;
+  if (body.length <= cap) return text;
+
+  const bytes = Buffer.from(text, "utf8");
+  const toIndex = (n: number) => Math.min(bytes.subarray(0, n).toString("utf8").length, body.length);
+  let start = 0;
+  let end = 0;
+  const m = submatches?.[0];
+  if (
+    m && Number.isInteger(m.start) && Number.isInteger(m.end) &&
+    m.start! >= 0 && m.start! <= m.end! && m.end! <= bytes.length
+  ) {
+    start = toIndex(m.start!);
+    end = Math.max(start, toIndex(m.end!));
+  }
+
+  let left: number;
+  let right: number;
+  if (end - start >= cap) {
+    left = start;
+    right = start + cap;
+  } else {
+    const budget = cap - (end - start);
+    const leftAvail = start;
+    const rightAvail = body.length - end;
+    const half = Math.floor(budget / 2);
+    const l = Math.min(leftAvail, half);
+    const r = Math.min(rightAvail, budget - l);
+    const l2 = Math.min(leftAvail, budget - r);
+    left = start - l2;
+    right = end + r;
+  }
+  // Do not split surrogate pairs.
+  const isLow = (i: number) => { const c = body.charCodeAt(i); return c >= 0xdc00 && c <= 0xdfff; };
+  const isHigh = (i: number) => { const c = body.charCodeAt(i); return c >= 0xd800 && c <= 0xdbff; };
+  if (left > 0 && left < body.length && isLow(left)) left++;
+  if (right < body.length && right > left && isHigh(right - 1)) right--;
+
+  return (left > 0 ? "…" : "") + body.slice(left, right) + (right < body.length ? "…" : eol);
+}
+
+/**
  * Keep the best `k` of `items` under `compare`, in that order.
  *
  * The sort is stable, so items that compare equal keep the order they arrived
@@ -206,7 +266,7 @@ function workspaceRelativePath(filePath: string, root: string): string {
   return path.relative(root, absoluteFilePath).split(path.sep).join("/");
 }
 
-/** One ripgrep `match` record as a result, its path relative to `root`. */
+/** One ripgrep `match` record as a result, its path relative to `root` and its snippet clipped (clipSnippet). */
 function textResultFromMatch(data: any, root: string): TextResult {
   const filePath = ripgrepPath(data?.path).name;
   const lineNum = data?.line_number ?? 0;
@@ -214,7 +274,7 @@ function textResultFromMatch(data: any, root: string): TextResult {
     path: workspaceRelativePath(filePath, root),
     line_start: lineNum,
     line_end: lineNum,
-    snippet: data?.lines?.text ?? "",
+    snippet: clipSnippet(data?.lines?.text ?? "", data?.submatches),
     engine: "ripgrep",
     score: 1.0,
     language: inferLanguage(filePath),

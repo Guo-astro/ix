@@ -16,6 +16,7 @@ import { llmLine } from "../llm.js";
 import { edgeTargetFor, rankTextUses, withEdgeSites } from "../edge-sites.js";
 import { renderWarning } from "../ui.js";
 import { currentRunSignal } from "../../client/run-signal.js";
+import { clipSnippet } from "./text.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -101,7 +102,10 @@ export function registerCallersCommand(program: Command): void {
                   resolved: false,
                   path: relativePath(data.path?.text) ?? "",
                   line: data.line_number ?? 0,
-                  attrs: { snippet: data.lines?.text?.trim() ?? "" },
+                  // Capped like `ix text`: one minified line must not flood
+                  // the context. Ranking still reads the whole line.
+                  attrs: { snippet: clipSnippet(data.lines?.text ?? "", data.submatches).trim() },
+                  fullLine: data.lines?.text?.trim() ?? "",
                 });
               }
             } catch { /* skip malformed lines */ }
@@ -113,9 +117,9 @@ export function registerCallersCommand(program: Command): void {
           // Calls first and the definition out: an unranked fallback led with
           // import lines and the target's own signature.
           const ranked = rankTextUses(
-            allTextResults.map((r) => ({ ...r, snippet: r.attrs.snippet as string })),
+            allTextResults.map((r) => ({ ...r, snippet: r.fullLine as string })),
             target.name,
-          ).map(({ snippet: _snippet, ...r }) => r);
+          ).map(({ snippet: _snippet, fullLine: _fullLine, ...r }) => r);
           const candidatesFound = ranked.length;
           // The ranking is a stable sort of a sorted list, so pages neither
           // overlap nor skip a row.
