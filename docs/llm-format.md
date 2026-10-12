@@ -161,13 +161,17 @@ Two commands cannot know a true total and say so rather than inventing one:
   before the page too: a deep page costs O(offset). The server returns at
   most 5000 rows, so no page reaches past row 5000: a page at or beyond it
   stays `truncated=true` (JSON: `capped: true`) and says to narrow with
-  `--path`, never `offset_past_end`.
+  `--path`, never `offset_past_end`. The server lists newest first, so
+  pages are stable only between ingests: an ingest while paging shifts later
+  pages, and rows can repeat or be skipped.
 - `ix text` reports `shown=N scanned=M`: ripgrep's traversal is bounded by a
   scan window, and `scanned` is how many matches were ranked, not how many
-  exist. The window holds the best `scanWindow(limit)` matches (code, then
-  tests, then prose; then path; then line) over every match ripgrep finds,
-  so the output is the same on every run. Pages are cut from that window, so
-  keep `--limit` fixed while paging. The page that reaches the end of a full
+  exist. The window holds the best `scanWindow(limit, offset)` matches (code,
+  then tests, then prose; then path; then line) over every match ripgrep
+  finds, so the output is the same on every run. The window looks
+  `5 × --limit` rows past the page's offset, and stops at 500 rows; a wider
+  window only appends rows, so pages line up. Keep `--limit` fixed while
+  paging (it is also ripgrep's per-file match cap). The page that reaches the end of a full
   window has no `next_offset=`; its message says to narrow with `--path` or
   `--language` instead, and so does a page past a full window (it is not
   `offset_past_end`: more matches exist). `--format json` stays a bare array of matches with no

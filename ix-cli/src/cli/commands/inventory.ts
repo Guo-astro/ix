@@ -150,11 +150,18 @@ Examples:
       // fit. The backend has no count endpoint, so this is the only honest
       // answer available: "there is at least one more". /v1/list has no
       // offset, so a page past the first fetches the rows before it too and
-      // drops them here; its order is stable, so pages line up.
+      // drops them here. /v1/list orders newest first (created_at DESC, then
+      // _key), so pages line up only while the graph does not change: an
+      // ingest between two pages shifts every later page, and rows repeat or
+      // are skipped.
       //
       // The server returns at most LIST_MAX_ROWS rows. A request over that
       // which comes back full may have been cut, so the list is not known to
       // end there: it stays truncated and no offset is called past the end.
+      // That is a count heuristic: exactly LIST_MAX_ROWS entities reads as
+      // "count unknown". The server does say whether it cut (Ix-memory 1.0.34+
+      // sets `X-Ix-Truncated: true` on /v1/list), but the client's post()
+      // returns only the parsed body, so the header is not visible here yet.
       const wanted = offset + limit + 1;
       let nodes = await client.listByKind(opts.kind, { limit: Math.min(wanted, LIST_MAX_ROWS), workspaceId: systemId ? undefined : resolveWorkspaceId(), scope: pathNeedle, systemId });
       const capped = wanted > LIST_MAX_ROWS && nodes.length >= LIST_MAX_ROWS;
