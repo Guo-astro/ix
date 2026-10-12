@@ -6,7 +6,7 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { createClient } from "../../client/factory.js";
 import { resolveWorkspaceRoot } from "../config.js";
-import { expandCapped, formatEdgeResults, printJson, relativePath, sliceEdgeResults, type Diagnostic } from "../format.js";
+import { expandCapped, formatEdgeResults, printJson, relativePath, sliceEdgeResults, sliceRanked, truncationHint, type Diagnostic } from "../format.js";
 import { checkGraphHealth, graphHealthProse, isUnhealthy, type GraphHealth } from "../graph-health.js";
 import { parsePickOption } from "../options.js";
 import { nextPageCommand, OFFSET_FLAG, parseOffset } from "../paging.js";
@@ -24,6 +24,9 @@ const execFileAsync = promisify(execFile);
  * never a regex or a flag (a symbol named `--pre=x` would otherwise run an rg
  * preprocessor). `--` ends the options before the root.
  */
+/** Rows per page of the text fallback. --limit does not apply to it. */
+export const TEXT_FALLBACK_PAGE = 10;
+
 export function callersTextSearchArgs(name: string, root: string): string[] {
   return ["--json", "--max-count", "10", "-F", "-e", name, "--", root];
 }
@@ -76,7 +79,7 @@ export function registerCallersCommand(program: Command): void {
       const remedy = health.fix ?? "ix ingest --force --recursive .";
 
       if (result.nodes.length === 0) {
-        // Fallback to text search. It shows a fixed 10 rows and ignores --offset.
+        // Fallback to text search: pages of TEXT_FALLBACK_PAGE rows, --offset honoured.
         try {
           const root = resolveWorkspaceRoot();
           // The timeout bounds a search that rg could otherwise run for ever.
@@ -114,18 +117,32 @@ export function registerCallersCommand(program: Command): void {
             target.name,
           ).map(({ snippet: _snippet, ...r }) => r);
           const candidatesFound = ranked.length;
-          const textResults = ranked.slice(0, 10);
+          // The ranking is a stable sort of a sorted list, so pages neither
+          // overlap nor skip a row.
+          const page = sliceRanked(ranked, TEXT_FALLBACK_PAGE, undefined, offset);
+          if (page.nextOffset !== undefined) page.next = nextPageCommand(cmd, [symbol], page.nextOffset);
+          const textResults = page.rows;
+          const pastEnd = candidatesFound > 0 && textResults.length === 0;
+          const pastEndMessage = `${candidatesFound} text candidates; --offset ${offset} is past the end.`;
+          const pageHint = page.truncated ? truncationHint(page, "text candidates") : undefined;
 
-          if (textResults.length > 0) {
+          if (candidatesFound > 0) {
             if (opts.format === "llm") {
               console.log(llmLine("callers", [
                 ["target", target.name], ["source", "text"],
+                ["offset", offset > 0 ? offset : undefined],
                 ["shown", textResults.length], ["total", candidatesFound],
               ]));
               console.log(llmLine("diagnostic", [
                 ["code", "text_fallback_used"],
                 ["message", "No graph-backed CALLS/REFERENCES edges; showing text matches."],
               ]));
+              if (pageHint) {
+                console.log(llmLine("diagnostic", [
+                  ["code", "results_truncated"], ["next_offset", page.nextOffset], ["message", pageHint],
+                ]));
+              }
+              if (pastEnd) console.log(llmLine("diagnostic", [["code", "offset_past_end"], ["message", pastEndMessage]]));
               for (const d of health.diagnostics ?? []) {
                 console.log(llmLine("diagnostic", [["code", d.code], ["message", d.message]]));
               }
@@ -142,12 +159,20 @@ export function registerCallersCommand(program: Command): void {
                 summary: {
                   candidatesFound,
                   candidatesReturned: textResults.length,
+                  ...(offset > 0 ? { offset } : {}),
+                  ...(page.truncated ? { truncated: true } : {}),
+                  ...(page.nextOffset !== undefined ? { nextOffset: page.nextOffset } : {}),
                 },
                 diagnostics: [{
                   code: "text_fallback_used",
                   message: `No graph-backed CALLS/REFERENCES edges found. If files were ingested before extraction was added, run: ${remedy}`,
-                }, ...(health.diagnostics ?? [])],
+                },
+                ...(pageHint ? [{ code: "results_truncated", message: pageHint }] : []),
+                ...(pastEnd ? [{ code: "offset_past_end", message: pastEndMessage }] : []),
+                ...(health.diagnostics ?? [])],
               });
+            } else if (pastEnd) {
+              console.log(pastEndMessage);
             } else {
               bannerOverRows(health, opts.format, textResults.length);
               stderr(chalk.dim("No graph-backed CALLS/REFERENCES edges found. Showing text-based candidate usages."));
@@ -156,8 +181,10 @@ export function registerCallersCommand(program: Command): void {
                 const snippet = r.attrs?.snippet ?? "";
                 console.log(`  ${chalk.dim(r.name)}  ${snippet}`);
               }
-              if (candidatesFound > 10) {
-                stderr(chalk.dim(`\n  (${candidatesFound} total candidates; showing 10)`));
+              if (page.truncated || offset > 0) {
+                const range = offset > 0 ? `${offset + 1}-${offset + textResults.length}` : `${textResults.length}`;
+                const next = page.next ?? (page.nextOffset !== undefined ? `--offset ${page.nextOffset}` : undefined);
+                stderr(chalk.dim(`\n  (${candidatesFound} total candidates; showing ${range})${next ? ` next: ${next}` : ""}`));
               }
             }
             return;
