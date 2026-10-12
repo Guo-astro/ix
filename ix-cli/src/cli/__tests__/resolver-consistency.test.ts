@@ -1,6 +1,6 @@
 // Copyright 2026 Ix Infrastructure Inc.
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Command, CommanderError } from "commander";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -126,10 +126,12 @@ async function run(register: Register, args: string[]): Promise<void> {
 let dir: string;
 let savedCwd: string;
 let savedExitCode: typeof process.exitCode;
+let savedIxHome: string | undefined;
 
 beforeEach(() => {
   // read looks on disk after resolving; keep it off the real checkout and ~/.ix.
   dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ix-resolver-")));
+  savedIxHome = process.env.IX_HOME;
   process.env.IX_HOME = path.join(dir, ".ix");
   savedCwd = process.cwd();
   process.chdir(dir);
@@ -147,7 +149,8 @@ beforeEach(() => {
 afterEach(() => {
   process.exitCode = savedExitCode;
   process.chdir(savedCwd);
-  delete process.env.IX_HOME;
+  if (savedIxHome === undefined) delete process.env.IX_HOME;
+  else process.env.IX_HOME = savedIxHome;
   resetReadScope();
   fs.rmSync(dir, { recursive: true, force: true });
   vi.restoreAllMocks();
@@ -175,5 +178,21 @@ describe("resolver flag consistency across content commands", () => {
       expect(requestedIds()).toContain("second-id");
       expect(requestedIds()).not.toContain("first-id");
     });
+  });
+});
+
+describe("test isolation", () => {
+  // afterEach must put back an IX_HOME the worker already had, not delete it.
+  const ambient = path.join(os.tmpdir(), "ix-resolver-ambient-ix-home");
+  beforeAll(() => {
+    process.env.IX_HOME = ambient;
+  });
+  afterAll(() => {
+    const after = process.env.IX_HOME;
+    delete process.env.IX_HOME;
+    expect(after).toBe(ambient);
+  });
+  it("points IX_HOME at the per-test temp dir while a test runs", () => {
+    expect(process.env.IX_HOME).toBe(path.join(dir, ".ix"));
   });
 });
