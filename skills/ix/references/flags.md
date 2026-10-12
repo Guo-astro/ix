@@ -510,6 +510,7 @@ List entities by kind with optional path scoping.
 | `--kind` | `<kind>` | — | Entity kind to list (class, method, function, file, module, etc.) |
 | `--path` | `<path>` | — | Filter by source file path substring |
 | `--limit` | `<n>` | `50` | Max results |
+| `--offset` | `<n>` | `0` | Skip the first N results (use the next: hint to page) |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
 | `--pretty` | — | off | Indent JSON output; the default only when stdout is a terminal |
 | `--quiet` | — | off | Drop headers, section titles and advisory hints |
@@ -784,6 +785,7 @@ Fast lexical/text search across the codebase (uses ripgrep).
 | Flag | Value | Default | Effect |
 |---|---|---|---|
 | `--limit` | `<n>` | `20` | Max results |
+| `--offset` | `<n>` | `0` | Skip the first N results (use the next: hint to page) |
 | `--path` | `<dir>` | `.` | Restrict search to a workspace-relative directory |
 | `--language` | `<lang>` | — | Filter by language (python, typescript, scala, etc.) |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |

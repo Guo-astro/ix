@@ -122,7 +122,25 @@ record: `shown` is what follows, `total` is what there was before the cut.
 
 ```
 callers target=verify_token shown=50 total=212 resolved=48 unresolved=2
-diagnostic code=results_truncated message="212 callers; showing 50. Raise --limit to see the rest."
+diagnostic code=results_truncated next_offset=50 message="212 callers; showing 50. next: ix callers --offset 50 verify_token"
+```
+
+A list that can be paged says where the next page starts: `next_offset=` on
+the `results_truncated` diagnostic, and a `next:` command in its message that
+repeats the caller's flags with `--offset`. A page past the first carries
+`offset=` on its header. A page that starts at or past the end is not an
+error: it prints a `diagnostic code=offset_past_end` and exits 0.
+
+The edge commands page over what one `/v1/expand` call returns, and the
+server stops at 1000 edges. When it reports a cut, or returns a full 1000,
+`total` is a floor: the list stays `results_truncated` on every page, its
+message says "At least N" and names the cap, no offset is called past the
+end, and the JSON summary carries `capped: true`. Past the cap, narrow the
+target (`--kind`, `--path`) instead of paging.
+
+```
+callers target=verify_token offset=50 shown=50 total=212 resolved=50
+diagnostic code=results_truncated next_offset=100 message="212 callers; showing 51-100. next: ix callers --offset 100 verify_token"
 ```
 
 `shown < total` is the only signal that a list is partial, and it exists
@@ -134,10 +152,22 @@ Two commands cannot know a true total and say so rather than inventing one:
 
 - `ix inventory` reports `shown=N truncated=true`. The backend applies the
   limit and has no count endpoint, so the CLI only knows the window it asked
-  for came back full.
+  for came back full. Its truncation message says "More than N" rather than
+  a total. `/v1/list` has no offset either, so `--offset N` fetches the N rows
+  before the page too: a deep page costs O(offset). The server returns at
+  most 5000 rows, so no page reaches past row 5000: a page at or beyond it
+  stays `truncated=true` (JSON: `capped: true`) and says to narrow with
+  `--path`, never `offset_past_end`.
 - `ix text` reports `shown=N scanned=M`: ripgrep's traversal is bounded by a
   scan window, and `scanned` is how many matches were ranked, not how many
-  exist.
+  exist. The window holds the best `scanWindow(limit)` matches (code, then
+  tests, then prose; then path; then line) over every match ripgrep finds,
+  so the output is the same on every run. Pages are cut from that window, so
+  keep `--limit` fixed while paging. The page that reaches the end of a full
+  window has no `next_offset=`; its message says to narrow with `--path` or
+  `--language` instead, and so does a page past a full window (it is not
+  `offset_past_end`: more matches exist). `--format json` stays a bare array of matches with no
+  paging fields; the next offset is the offset plus its length.
 
 ## Rows an agent acts on
 

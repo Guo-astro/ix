@@ -76,12 +76,36 @@ describe("resolving an ambiguous symbol over MCP", () => {
     const tools = (await client.listTools()).tools;
     const has = (name: string) =>
       "offset" in (((tools.find((t) => t.name === name)!.inputSchema) as { properties?: Record<string, unknown> }).properties ?? {});
-    for (const name of ["ix_neighbors", "ix_callers", "ix_callees", "ix_imports", "ix_imported_by"]) {
+    for (const name of ["ix_neighbors", "ix_callers", "ix_callees", "ix_imports", "ix_imported_by", "ix_text", "ix_inventory"]) {
       expect(has(name), name).toBe(true);
     }
     for (const name of ["ix_impact", "ix_read", "ix_explain"]) {
       expect(has(name), name).toBe(false);
     }
+  });
+
+  it("forwards --offset on ix_text and ix_inventory, which print next_offset= too", async () => {
+    const { calls, runIx } = recorder();
+    const client = await connect(runIx);
+    await client.callTool({ name: "ix_text", arguments: { pattern: "needle", offset: 20 } });
+    await client.callTool({ name: "ix_inventory", arguments: { kind: "class", offset: 50 } });
+    await client.callTool({ name: "ix_text", arguments: { pattern: "needle" } });
+    await client.callTool({ name: "ix_inventory", arguments: { kind: "class" } });
+    expect(calls[0]).toContain("--offset=20");
+    expect(calls[1]).toContain("--offset=50");
+    expect(calls[2].some((a) => a.startsWith("--offset"))).toBe(false);
+    expect(calls[3].some((a) => a.startsWith("--offset"))).toBe(false);
+  });
+
+  it("rejects a negative offset on ix_text and ix_inventory", async () => {
+    const { calls, runIx } = recorder();
+    const client = await connect(runIx);
+    for (const [name, args] of [["ix_text", { pattern: "needle" }], ["ix_inventory", { kind: "class" }]] as const) {
+      const result = await client.callTool({ name, arguments: { ...args, offset: -1 } })
+        .then((r) => (r as CallToolResult).isError === true, () => true);
+      expect(result, name).toBe(true);
+    }
+    expect(calls).toEqual([]);
   });
 
   it("sends nothing for the flags the caller left out", async () => {
