@@ -111,6 +111,11 @@ export interface Slice<T> {
   nextOffset?: number;
   /** The command that prints the next page, when the caller can build one. */
   next?: string;
+  /**
+   * The server cut the list before this layer saw it, so `total` is a lower
+   * bound: more rows may exist past it, and no `--offset` can reach them.
+   */
+  capped?: boolean;
 }
 
 /**
@@ -165,17 +170,59 @@ function edgeRowPriority(node: any): number {
  * caller a `locate` before it can be read. Neither should displace a row that
  * carries both.
  */
-export function sliceEdgeResults(nodes: any[], limit: number, offset = 0): Slice<any> {
-  return sliceRanked(nodes, limit, edgeRowPriority, offset);
+export function sliceEdgeResults(nodes: any[], limit: number, offset = 0, capped = false): Slice<any> {
+  const slice = sliceRanked(nodes, limit, edgeRowPriority, offset);
+  if (capped) {
+    slice.capped = true;
+    // The list is not known to end here, whatever this page holds.
+    slice.truncated = true;
+  }
+  return slice;
+}
+
+/**
+ * The most edges one /v1/expand call returns. The backend clamps the request's
+ * `limit` to this (Ix-memory ArangoGraphQueryApi.expand / expandWith:
+ * `maxEdges = min(limit, 1000)`, and ExpandRoutes defaults `limit` to 1000).
+ */
+export const EXPAND_MAX_EDGES = 1000;
+
+/**
+ * Whether an expand result may have been cut by the server's edge cap. The
+ * server says so in `truncated` when it is new enough to; an older one only
+ * shows it by returning a full cap's worth of edges or nodes.
+ */
+export function expandCapped(result: { nodes?: unknown[]; edges?: unknown[]; truncated?: unknown }): boolean {
+  return result.truncated === true
+    || (result.edges?.length ?? 0) >= EXPAND_MAX_EDGES
+    || (result.nodes?.length ?? 0) >= EXPAND_MAX_EDGES;
 }
 
 /** What was left out, and the one flag that gets it. */
 export function truncationHint(slice: Slice<unknown>, relation: string): string {
   const offset = slice.offset ?? 0;
+  if (slice.capped) return cappedHint(slice, relation);
   const range = offset > 0 ? `${offset + 1}-${offset + slice.shown}` : `${slice.shown}`;
   if (slice.nextOffset === undefined) return `${slice.total} ${relation}; showing ${range}. Raise --limit to see them.`;
   const next = slice.next ?? `--offset ${slice.nextOffset}`;
   return `${slice.total} ${relation}; showing ${range}. next: ${next}`;
+}
+
+/**
+ * The hint for a list the server cut at EXPAND_MAX_EDGES: the count is a
+ * floor, and paging stops where the server's rows do.
+ */
+function cappedHint(slice: Slice<unknown>, relation: string): string {
+  const offset = slice.offset ?? 0;
+  const head = `At least ${slice.total} ${relation} (the server returns at most ${EXPAND_MAX_EDGES} edges)`;
+  if (slice.nextOffset !== undefined) {
+    const range = offset > 0 ? `${offset + 1}-${offset + slice.shown}` : `${slice.shown}`;
+    return `${head}; showing ${range}. next: ${slice.next ?? `--offset ${slice.nextOffset}`}`;
+  }
+  const where = slice.shown > 0
+    ? `showing ${offset > 0 ? `${offset + 1}-${offset + slice.shown}` : slice.shown}, the end of what it returned`
+    : offset > 0 ? `--offset ${offset} is beyond the rows it returned` : "showing 0";
+  return `${head}; ${where}. Narrow the target with --kind or --path to see the rest.`;
 }
 
 /** The message for a page that starts at or past the end of the list. */
@@ -184,7 +231,8 @@ function pastEndMessage(slice: Slice<unknown>, relation: string): string {
 }
 
 function isPastEnd(slice: Slice<unknown>): boolean {
-  return slice.total > 0 && (slice.offset ?? 0) >= slice.total;
+  // A capped list has no known end, so no offset is known to be past it.
+  return !slice.capped && slice.total > 0 && (slice.offset ?? 0) >= slice.total;
 }
 
 // ── Row locations ──────────────────────────────────────────────────────────
@@ -839,6 +887,8 @@ export function formatEdgeResults(
       truncated: slice.truncated,
       offset: slice.offset ?? 0,
       ...(slice.nextOffset !== undefined ? { nextOffset: slice.nextOffset } : {}),
+      // `total` is then a lower bound: the server stopped at its edge cap.
+      ...(slice.capped ? { capped: true } : {}),
     };
     printJson(output);
     return;

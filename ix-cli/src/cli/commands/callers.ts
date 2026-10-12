@@ -6,7 +6,7 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { createClient } from "../../client/factory.js";
 import { resolveWorkspaceRoot } from "../config.js";
-import { formatEdgeResults, printJson, relativePath, sliceEdgeResults, type Diagnostic } from "../format.js";
+import { expandCapped, formatEdgeResults, printJson, relativePath, sliceEdgeResults, type Diagnostic } from "../format.js";
 import { checkGraphHealth, graphHealthProse, isUnhealthy, type GraphHealth } from "../graph-health.js";
 import { parsePickOption } from "../options.js";
 import { nextPageCommand, OFFSET_FLAG, parseOffset } from "../paging.js";
@@ -167,7 +167,7 @@ export function registerCallersCommand(program: Command): void {
         // Both graph and text empty (also the health-gated path: --offset does not apply).
         formatEdgeResults(sliceEdgeResults([], limit), "callers", target.name, opts.format, target, "graph", health.diagnostics);
       } else {
-        const slice = sliceEdgeResults(result.nodes, limit, offset);
+        const slice = sliceEdgeResults(result.nodes, limit, offset, expandCapped(result));
         if (slice.nextOffset !== undefined) slice.next = nextPageCommand(cmd, [symbol], slice.nextOffset);
         const site = await edgeTargetFor(client, target, "callers");
         formatEdgeResults({ ...slice, rows: withEdgeSites(slice.rows, "callers", site) }, "callers", target.name, opts.format, target, "graph", health.diagnostics);
@@ -200,7 +200,7 @@ export function registerCallersCommand(program: Command): void {
       });
       const health = await healthDiagnostics(healthCheck);
       bannerOverRows(health, opts.format, result.nodes.length);
-      const slice = sliceEdgeResults(result.nodes, calleeLimit, calleeOffset);
+      const slice = sliceEdgeResults(result.nodes, calleeLimit, calleeOffset, expandCapped(result));
       if (slice.nextOffset !== undefined) slice.next = nextPageCommand(cmd, [symbol], slice.nextOffset);
       const site = await edgeTargetFor(client, target, "callees");
       formatEdgeResults({ ...slice, rows: withEdgeSites(slice.rows, "callees", site) }, "callees", target.name, opts.format, target, "graph", health.diagnostics);

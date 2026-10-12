@@ -2,7 +2,7 @@
 
 import type { Command } from "commander";
 import { createClient } from "../../client/factory.js";
-import { formatEdgeResults, sliceEdgeResults } from "../format.js";
+import { expandCapped, formatEdgeResults, sliceEdgeResults } from "../format.js";
 import { resolveFileOrReport, printResolved } from "../resolve.js";
 import { parsePickOption } from "../options.js";
 import { nextPageCommand, OFFSET_FLAG, parseOffset } from "../paging.js";
@@ -28,7 +28,7 @@ export function registerImportsCommand(program: Command): void {
       if (!target) return;
       if (opts.format === "text") printResolved(target);
       const result = await client.expand(target.id, { direction: "out", predicates: ["IMPORTS"] });
-      const slice = sliceEdgeResults(result.nodes, limit, offset);
+      const slice = sliceEdgeResults(result.nodes, limit, offset, expandCapped(result));
       if (slice.nextOffset !== undefined) slice.next = nextPageCommand(cmd, [symbol], slice.nextOffset);
       const site = await edgeTargetFor(client, target, "imports");
       formatEdgeResults({ ...slice, rows: withEdgeSites(slice.rows, "imports", site) }, "imports", target.name, opts.format, target, "graph");
@@ -53,7 +53,7 @@ export function registerImportsCommand(program: Command): void {
       if (!target) return;
       if (opts.format === "text") printResolved(target);
       const result = await client.expand(target.id, { direction: "in", predicates: ["IMPORTS"] });
-      const slice = sliceEdgeResults(result.nodes, limit, offset);
+      const slice = sliceEdgeResults(result.nodes, limit, offset, expandCapped(result));
       if (slice.nextOffset !== undefined) slice.next = nextPageCommand(cmd, [symbol], slice.nextOffset);
       const site = await edgeTargetFor(client, target, "imported-by");
       formatEdgeResults({ ...slice, rows: withEdgeSites(slice.rows, "imported-by", site) }, "imported-by", target.name, opts.format, target, "graph");
