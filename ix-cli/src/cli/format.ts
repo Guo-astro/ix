@@ -198,14 +198,21 @@ export function expandCapped(result: { nodes?: unknown[]; edges?: unknown[]; tru
     || (result.nodes?.length ?? 0) >= EXPAND_MAX_EDGES;
 }
 
-/** What was left out, and the one flag that gets it. */
+/**
+ * What was left out, and the one flag that gets it.
+ *
+ * `next:` is printed only when the caller set `slice.next`: that is how a
+ * command says it takes `--offset`. `sliceRanked` sets `nextOffset` on every
+ * truncated slice, including slices cut by commands with no `--offset` (`ix
+ * impact`'s leaf rows), and pointing those at a flag they reject would send the
+ * reader into an unknown-option error.
+ */
 export function truncationHint(slice: Slice<unknown>, relation: string): string {
   const offset = slice.offset ?? 0;
   if (slice.capped) return cappedHint(slice, relation);
   const range = offset > 0 ? `${offset + 1}-${offset + slice.shown}` : `${slice.shown}`;
-  if (slice.nextOffset === undefined) return `${slice.total} ${relation}; showing ${range}. Raise --limit to see them.`;
-  const next = slice.next ?? `--offset ${slice.nextOffset}`;
-  return `${slice.total} ${relation}; showing ${range}. next: ${next}`;
+  if (slice.nextOffset === undefined || slice.next === undefined) return `${slice.total} ${relation}; showing ${range}. Raise --limit to see them.`;
+  return `${slice.total} ${relation}; showing ${range}. next: ${slice.next}`;
 }
 
 /**
@@ -217,7 +224,8 @@ function cappedHint(slice: Slice<unknown>, relation: string): string {
   const head = `At least ${slice.total} ${relation} (the server returns at most ${EXPAND_MAX_EDGES} edges)`;
   if (slice.nextOffset !== undefined) {
     const range = offset > 0 ? `${offset + 1}-${offset + slice.shown}` : `${slice.shown}`;
-    return `${head}; showing ${range}. next: ${slice.next ?? `--offset ${slice.nextOffset}`}`;
+    if (slice.next !== undefined) return `${head}; showing ${range}. next: ${slice.next}`;
+    return `${head}; showing ${range}. Raise --limit, or narrow the target with --kind or --path, to see the rest.`;
   }
   const where = slice.shown > 0
     ? `showing ${offset > 0 ? `${offset + 1}-${offset + slice.shown}` : slice.shown}, the end of what it returned`

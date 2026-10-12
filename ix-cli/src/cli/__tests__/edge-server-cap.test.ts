@@ -69,9 +69,9 @@ describe("edge paging at the server cap", () => {
   });
 
   it("a page inside the cap still points at the next page, with the count as a floor", () => {
-    const s = sliceEdgeResults(full(), 50, 0, true);
+    const s = { ...sliceEdgeResults(full(), 50, 0, true), next: "ix callers t --offset 50" };
     expect(s.nextOffset).toBe(50);
-    expect(truncationHint(s, "callers")).toBe("At least 1000 callers (the server returns at most 1000 edges); showing 50. next: --offset 50");
+    expect(truncationHint(s, "callers")).toBe("At least 1000 callers (the server returns at most 1000 edges); showing 50. next: ix callers t --offset 50");
   });
 
   it("leaves an uncapped list alone", () => {

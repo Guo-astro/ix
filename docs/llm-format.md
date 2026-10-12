@@ -122,8 +122,12 @@ record: `shown` is what follows, `total` is what there was before the cut.
 
 ```
 callers target=verify_token shown=50 total=212 resolved=48 unresolved=2
-diagnostic code=results_truncated message="212 callers; showing 50. Raise --limit to see the rest."
+diagnostic code=results_truncated next_offset=50 message="212 callers; showing 50. next: ix callers --offset 50 verify_token"
 ```
+
+The `next:` text is for whoever reads it: over MCP it is the tool's own
+input (`next: offset=50`), not a CLI command. A command with no `--offset`
+never prints `next:`; its message says `Raise --limit to see them.`
 
 `shown < total` is the only signal that a list is partial, and it exists
 because the header used to carry a single `total` field holding the length of
