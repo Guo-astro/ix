@@ -143,6 +143,10 @@ callers target=verify_token offset=50 shown=50 total=212 resolved=50
 diagnostic code=results_truncated next_offset=100 message="212 callers; showing 51-100. next: ix callers --offset 100 verify_token"
 ```
 
+The `next:` text is for whoever reads it: over MCP it is the tool's own
+input (`next: offset=50`), not a CLI command. A command with no `--offset`
+never prints `next:`; its message says `Raise --limit to see them.`
+
 `shown < total` is the only signal that a list is partial, and it exists
 because the header used to carry a single `total` field holding the length of
 the *cut* list — so `ix callers` on a symbol with 212 callers reported

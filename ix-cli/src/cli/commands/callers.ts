@@ -19,14 +19,14 @@ import { currentRunSignal } from "../../client/run-signal.js";
 
 const execFileAsync = promisify(execFile);
 
+/** Rows per page of the text fallback. --limit does not apply to it. */
+export const TEXT_FALLBACK_PAGE = 10;
+
 /**
  * rg's argv for the text fallback. -F and -e: the name is a literal pattern,
  * never a regex or a flag (a symbol named `--pre=x` would otherwise run an rg
  * preprocessor). `--` ends the options before the root.
  */
-/** Rows per page of the text fallback. --limit does not apply to it. */
-export const TEXT_FALLBACK_PAGE = 10;
-
 export function callersTextSearchArgs(name: string, root: string): string[] {
   return ["--json", "--max-count", "10", "-F", "-e", name, "--", root];
 }

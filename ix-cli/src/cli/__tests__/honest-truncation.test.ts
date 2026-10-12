@@ -12,7 +12,8 @@ import {
   formatTextResults, renderEdgeResultsLlm, renderTextResultsLlm, sliceEdgeResults, sliceRanked, truncationHint,
   type TextResult,
 } from "../format.js";
-import { nextPageCommand } from "../paging.js";
+import { IX_CALLER_ENV } from "../next-step.js";
+import { nextPageCommand, shellQuote } from "../paging.js";
 import { LIST_MAX_ROWS, registerInventoryCommand, renderInventoryLlm } from "../commands/inventory.js";
 import { compareTextResults, keepTopK, scanWindow, textResultPriority } from "../commands/text.js";
 
@@ -67,12 +68,23 @@ describe("sliceEdgeResults", () => {
     expect(header).toBe("callers target=verify_token shown=1 total=2 resolved=1");
   });
 
-  it("names the flag that would show the rest", () => {
+  it("names the next page when the command set one", () => {
     const all = Array.from({ length: 212 }, (_, i) => node(`c${i}`, "src/a.ts"));
-    const lines = renderEdgeResultsLlm(sliceEdgeResults(all, 50), "callers", "verify_token", "graph");
+    const s = { ...sliceEdgeResults(all, 50), next: "ix callers verify_token --offset 50" };
+    const lines = renderEdgeResultsLlm(s, "callers", "verify_token", "graph");
     expect(lines[1]).toBe(
-      'diagnostic code=results_truncated next_offset=50 message="212 callers; showing 50. next: --offset 50"',
+      'diagnostic code=results_truncated next_offset=50 message="212 callers; showing 50. next: ix callers verify_token --offset 50"',
     );
+  });
+
+  it("never points at --offset when the command did not opt into paging", () => {
+    // `ix impact` slices its leaf rows with sliceEdgeResults but has no --offset.
+    const all = Array.from({ length: 25 }, (_, i) => node(`c${i}`, "src/a.ts"));
+    const s = sliceEdgeResults(all, 10);
+    expect(s.nextOffset).toBe(10);
+    expect(truncationHint(s, "callers")).toBe("25 callers; showing 10. Raise --limit to see them.");
+    const capped = sliceEdgeResults(Array.from({ length: 1000 }, (_, i) => node(`c${i}`, "src/a.ts")), 10, 0, true);
+    expect(truncationHint(capped, "callers")).not.toContain("--offset");
   });
 });
 
@@ -104,7 +116,9 @@ describe("paging with --offset", () => {
     const lines = renderEdgeResultsLlm(s, "callers", "t", "graph");
     expect(lines[0]).toBe("callers target=t offset=50 shown=50 total=212 resolved=50");
     expect(lines[1]).toContain("next_offset=100");
-    expect(lines[1]).toContain("showing 51-100. next: --offset 100");
+    expect(lines[1]).toContain("showing 51-100. Raise --limit");
+    const paged = renderEdgeResultsLlm({ ...s, next: "ix callers t --offset 100" }, "callers", "t", "graph");
+    expect(paged[1]).toContain("showing 51-100. next: ix callers t --offset 100");
   });
 
   it("uses the caller's next command when given", () => {
@@ -182,6 +196,34 @@ describe("nextPageCommand", () => {
     const cmd = parsed(["a b"]);
     expect(nextPageCommand(cmd, ["a b"], 50)).toBe("ix callers --offset 50 'a b'");
     expect(nextPageCommand(cmd, ["-x"], 50)).toBe("ix callers --offset 50 -- -x");
+  });
+
+  it("over MCP names the tool's offset input, not a CLI command", () => {
+    const cmd = parsed(["--kind", "method", "x"]);
+    const prev = process.env[IX_CALLER_ENV];
+    process.env[IX_CALLER_ENV] = "mcp";
+    try {
+      expect(nextPageCommand(cmd, ["x"], 50)).toBe("offset=50");
+    } finally {
+      if (prev === undefined) delete process.env[IX_CALLER_ENV];
+      else process.env[IX_CALLER_ENV] = prev;
+    }
+  });
+});
+
+describe("shellQuote", () => {
+  it("uses POSIX quoting off Windows", () => {
+    expect(shellQuote("it's", "linux")).toBe(`'it'\\''s'`);
+  });
+
+  it("doubles an embedded quote on Windows (PowerShell)", () => {
+    expect(shellQuote("it's", "win32")).toBe("'it''s'");
+    expect(shellQuote("a b", "win32")).toBe("'a b'");
+  });
+
+  it("leaves a safe word bare on every platform", () => {
+    expect(shellQuote("src/a.ts", "win32")).toBe("src/a.ts");
+    expect(shellQuote("src/a.ts", "darwin")).toBe("src/a.ts");
   });
 });
 
