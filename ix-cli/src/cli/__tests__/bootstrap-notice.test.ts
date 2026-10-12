@@ -20,25 +20,47 @@ const LOGO_ASSET = join(PKG_ROOT, "assets", "logo.png");
 
 // Every renderer subprocess this file needs, keyed by its invocation. Each one
 // takes ~0.7s, almost all of it the PNG decode; run serially they were most of
-// this file's wall time. beforeAll starts them all at once and the tests await
-// the memoised result, so the assertions are unchanged.
+// this file's wall time. beforeAll queues them all and the tests await the
+// memoised result, so the assertions are unchanged.
+//
+// At most MAX_RENDERERS run at once: each decode peaks at ~400 MB RSS, and
+// fifteen together (~4 GB on top of the other vitest workers) can push a 7 GB
+// hosted runner into swap or OOM.
+const MAX_RENDERERS = 4;
 type CliResult = { status: number; stdout: string; stderr: string };
 const cliRuns = new Map<string, Promise<CliResult>>();
+let activeRenderers = 0;
+let peakRenderers = 0;
+const waiting: Array<() => void> = [];
+async function withRendererSlot<T>(work: () => Promise<T>): Promise<T> {
+  if (activeRenderers >= MAX_RENDERERS) await new Promise<void>((r) => waiting.push(r));
+  activeRenderers++;
+  peakRenderers = Math.max(peakRenderers, activeRenderers);
+  try {
+    return await work();
+  } finally {
+    activeRenderers--;
+    waiting.shift()?.();
+  }
+}
 function runCli(args: string[], env: NodeJS.ProcessEnv = {}): Promise<CliResult> {
   const key = JSON.stringify([args, env]);
   let p = cliRuns.get(key);
   if (!p) {
-    p = new Promise((resolve) => {
-      execFile(
-        process.execPath,
-        [RENDERER, ...args],
-        { encoding: "utf8", env: { ...process.env, ...env }, maxBuffer: 64 * 1024 * 1024 },
-        (err, stdout, stderr) => {
-          const code = err ? (err as NodeJS.ErrnoException & { code?: unknown }).code : 0;
-          resolve({ status: typeof code === "number" ? code : -1, stdout, stderr });
-        },
-      );
-    });
+    p = withRendererSlot(
+      () =>
+        new Promise<CliResult>((resolve) => {
+          execFile(
+            process.execPath,
+            [RENDERER, ...args],
+            { encoding: "utf8", env: { ...process.env, ...env }, maxBuffer: 64 * 1024 * 1024 },
+            (err, stdout, stderr) => {
+              const code = err ? (err as NodeJS.ErrnoException & { code?: unknown }).code : 0;
+              resolve({ status: typeof code === "number" ? code : -1, stdout, stderr });
+            },
+          );
+        }),
+    );
     cliRuns.set(key, p);
   }
   return p;
@@ -69,8 +91,8 @@ function goldenArgs(g: string): string[] | null {
 let banner: string | null = null;
 
 beforeAll(async () => {
-  // Start every subprocess render first, so they run while the in-process
-  // decode below holds this thread.
+  // Queue every subprocess render first, so the first MAX_RENDERERS run while
+  // the in-process decode below holds this thread.
   const pending = Promise.all([
     ...goldens.map((g) => goldenArgs(g)).filter((a): a is string[] => a !== null).map((a) => runCli(a)),
     runCli(["--width", "16", "--json"]),
@@ -196,6 +218,13 @@ describe("banner deliverability (the inputs must ship)", () => {
 });
 
 describe("render-logo CLI contract", () => {
+  it("never runs more than four renderer subprocesses at once (bounded memory)", () => {
+    // beforeAll queued every render this file needs; the cap must have held.
+    expect(cliRuns.size).toBeGreaterThan(MAX_RENDERERS);
+    expect(peakRenderers).toBeGreaterThan(0);
+    expect(peakRenderers).toBeLessThanOrEqual(4);
+  });
+
   it("exit 0 + JSON honesty block on --json (cells/ink/truncated)", async () => {
     const meta = JSON.parse(await run(["--width", "16", "--json"]));
     expect(meta.ok).toBe(true);
