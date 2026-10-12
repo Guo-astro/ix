@@ -435,11 +435,14 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
       limit: z.number().int().min(1).max(100).default(20),
       path: z.string().min(1).optional(),
       language: z.string().min(1).optional(),
+      // Takes back next_offset= (see EDGE_TOOL_INPUT); no description, same budget.
+      offset: z.number().int().min(0).max(100000).optional(),
     },
     async (input) => {
       const options = [`--limit=${numberArg(input, "limit")}`];
       pushOption(options, "--path", input.path);
       pushOption(options, "--language", input.language);
+      if (typeof input.offset === "number") options.push(`--offset=${numberArg(input, "offset")}`);
       return runFormatted(runIx, "ix_text", ix("text", [stringArg(input, "pattern")], options));
     },
   );
@@ -612,10 +615,13 @@ export function createIxMcpServer(options: CreateServerOptions = {}): McpServer 
       kind: z.string().min(1).default("file"),
       path: z.string().min(1).optional(),
       limit: z.number().int().min(1).max(500).default(50),
+      // Takes back next_offset= (see EDGE_TOOL_INPUT); no description, same budget.
+      offset: z.number().int().min(0).max(100000).optional(),
     },
     async (input) => {
       const options = [`--kind=${stringArg(input, "kind")}`, `--limit=${numberArg(input, "limit")}`];
       pushOption(options, "--path", input.path);
+      if (typeof input.offset === "number") options.push(`--offset=${numberArg(input, "offset")}`);
       return runFormatted(runIx, "ix_inventory", ix("inventory", [], options));
     },
   );
