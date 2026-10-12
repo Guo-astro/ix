@@ -235,16 +235,24 @@ export function resolveTextSearchPath(root: string, searchPath: string): string 
  * more than it prints. Bounded so a term matching everything is still one
  * cheap pass.
  *
- * The window is the best `scanWindow(limit)` matches under
+ * The window is the best `scanWindow(limit, offset)` matches under
  * `compareTextResults`, taken over every match ripgrep finds — not the first
- * that many to arrive, which would differ between runs. `--offset` pages are
- * cut from this one window, so they only line up while `--limit` stays fixed.
+ * that many to arrive, which would differ between runs.
+ *
+ * `--offset` widens the window to look the same distance past the page as the
+ * first page looks past its own, so paging is not stuck inside the first
+ * page's window. The window is the top K of one total order, so a wider
+ * window only appends rows: page N cut from a wide window is the page N a
+ * narrow one would show. Pages line up while `--limit` stays fixed (it is
+ * also ripgrep's per-file `--max-count`). The window still stops at
+ * SCAN_WINDOW_MAX rows, and past that the output says to narrow.
  */
 const SCAN_WINDOW_FACTOR = 5;
-const SCAN_WINDOW_MAX = 500;
+export const SCAN_WINDOW_MAX = 500;
 
-export function scanWindow(limit: number): number {
-  return Math.min(Math.max(limit * SCAN_WINDOW_FACTOR, limit), SCAN_WINDOW_MAX);
+export function scanWindow(limit: number, offset = 0): number {
+  const ahead = Math.max(limit * SCAN_WINDOW_FACTOR, limit);
+  return Math.min(Math.max(offset, 0) + ahead, SCAN_WINDOW_MAX);
 }
 
 const TEST_PATH = /(^|\/)(tests?|__tests__|fixtures?|testdata|spec)(\/|$)|\.(test|spec)\./i;
@@ -316,7 +324,7 @@ export function registerTextCommand(program: Command, executeRipgrep?: RunRipgre
         return;
       }
       try {
-        const window = scanWindow(limit);
+        const window = scanWindow(limit, offset);
         const rgArgs = [
           "--json",
           // Per file, deliberately still `--limit`: one file monopolising the

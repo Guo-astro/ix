@@ -154,6 +154,14 @@ describe("text ripgrep stream lifecycle", () => {
     expect(out[1]).toMatch(/--offset 4 needle"$/);
     expect(out.slice(2).map((l) => l.match(/line=(\d+)/)?.[1])).toEqual(["3", "4"]);
   });
+  it("pages past the first page's scan window: --offset widens the window", async () => {
+    // --limit 1 scans 5 rows at offset 0. Twelve code matches, one per file.
+    const records = Array.from({ length: 12 }, (_, i) => matchAt(`src/f${String(i).padStart(2, "0")}.ts`, 1));
+    const out = await runArgs(["needle", "--limit", "1", "--offset", "7", "--format", "llm"], records);
+    expect(out[0]).toBe("text offset=7 shown=1 scanned=12 truncated=true");
+    expect(out[1]).toContain("next_offset=8");
+    expect(out.slice(2).map((l) => l.match(/path=(\S+)/)?.[1])).toEqual(["src/f07.ts"]);
+  });
   it("ranks a match record whose fields come in another order the same way", async () => {
     const reordered = JSON.stringify({ data: { line_number: 2, lines: { text: "late" }, path: { text: "src/a.ts" } }, type: "match" }) + "\n";
     const out = await runArgs(["needle", "--limit", "5", "--format", "json"], [matchAt("src/b.ts", 1), reordered, matchAt("src/a.ts", 1)]);

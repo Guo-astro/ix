@@ -15,7 +15,7 @@ import {
 import { IX_CALLER_ENV } from "../next-step.js";
 import { nextPageCommand, shellQuote } from "../paging.js";
 import { LIST_MAX_ROWS, registerInventoryCommand, renderInventoryLlm } from "../commands/inventory.js";
-import { compareTextResults, keepTopK, scanWindow, textResultPriority } from "../commands/text.js";
+import { compareTextResults, keepTopK, SCAN_WINDOW_MAX, scanWindow, textResultPriority } from "../commands/text.js";
 
 function node(name: string, path?: string) {
   return { id: `${name}-0000-0000-0000-000000000000`, name, kind: "function", ...(path ? { provenance: { source_uri: path } } : {}) };
@@ -363,6 +363,13 @@ describe("text result ranking", () => {
     expect(scanWindow(20)).toBe(100);
     expect(scanWindow(1)).toBe(5);
     expect(scanWindow(400)).toBe(500);
+  });
+
+  it("widens the scan window with --offset, up to the cap", () => {
+    expect(scanWindow(20, 0)).toBe(100);
+    expect(scanWindow(20, 100)).toBe(200);
+    expect(scanWindow(20, 460)).toBe(SCAN_WINDOW_MAX);
+    expect(scanWindow(20, 10_000)).toBe(SCAN_WINDOW_MAX);
   });
 
   it("puts code above tests, and tests above prose", () => {
