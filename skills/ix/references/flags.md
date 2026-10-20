@@ -78,8 +78,12 @@ surfaces (#575).
   (`ix_neighbors symbol=X relation=callers`), never as CLI flags.
 - **`ix read <file>` stops at 400 lines.** The header then carries
   `truncated=true total_lines=<n> next=<path>:401-800`, so the next page is one
-  command away. A line range you typed (`ix read a.ts:1-900`) is never capped,
-  a symbol target is its own span, and `--all` reads the whole file.
+  command away. A line range you typed (`ix read a.ts:1-900`) is never capped.
+  A symbol longer than 400 lines is capped the same way. Its header adds
+  `span_end=<last line>`, `total_lines` is the symbol's span length (a count,
+  not the file's), and `next=<path>:10-1327@410` resumes the symbol's span, is
+  capped again and carries its own `next=` until the symbol's last line.
+  `--all` reads the whole file or symbol.
 - **`ix depends` and `ix trace` stop at depth 3 and 100 nodes.** Both were
   unbounded, which on a hub is thousands of nodes the caller pays for before
   seeing any. The output distinguishes the two ways a walk ends:
@@ -671,7 +675,7 @@ Read raw file content, line ranges, or symbol source code.
 | `--path` | `<path>` | — | Restrict to symbols from files matching this path substring |
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
 | `--root` | `<dir>` | — | Workspace root directory |
-| `--all` | — | off | Read the whole file, past the 400-line default cap |
+| `--all` | — | off | Read the whole file or symbol, past the 400-line default cap |
 
 ### `ix reset`
 
