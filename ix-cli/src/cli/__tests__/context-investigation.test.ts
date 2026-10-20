@@ -224,6 +224,28 @@ describe("ix context investigation state", () => {
     expect(loaded?.bundle.evidence).toEqual(bundle.evidence);
   });
 
+  it("keeps generatedAt in the saved file, and resumes it", () => {
+    const bundle = bundleWith([makeClaim("renders to DOM", 0.9)]);
+    saveInvestigation("widget-check", bundle);
+
+    const onDisk = JSON.parse(readFileSync(join(investigationsDir(), "widget-check.json"), "utf8"));
+    expect(typeof bundle.generatedAt).toBe("string");
+    expect(onDisk.bundle.generatedAt).toBe(bundle.generatedAt);
+    expect(loadInvestigation("widget-check")?.bundle.generatedAt).toBe(bundle.generatedAt);
+  });
+
+  it("loads and renders a saved bundle that lacks generatedAt", () => {
+    const { generatedAt: _omit, ...bundle } = bundleWith([makeClaim("renders to DOM", 0.9)]);
+    writeState("no-stamp", envelope("no-stamp", bundle));
+
+    expect(loadInvestigation("no-stamp")?.bundle.target.name).toBe("Widget");
+    for (const format of ["json", "llm"] as const) {
+      const lines = captureLog(() => renderSavedInvestigation("no-stamp", format));
+      expect(lines.length).toBeGreaterThan(0);
+    }
+    expect(process.exitCode).toBe(priorExitCode);
+  });
+
   it("round-trips the format the budget was sized for, and loads a save without one", () => {
     const sized = bundleWith([makeClaim("renders to DOM", 0.9)]);
     sized.budgets = { ...sized.budgets, format: "llm" };
