@@ -172,3 +172,78 @@ describe("check-links arguments", () => {
     expect(stdout).toBe("");
   });
 });
+
+/**
+ * The built-dist pass (`--dist <dir> --dist-only`) crawls what the docs build
+ * actually emits. These tests build a miniature dist by hand — the root
+ * `_redirects` and `404.html` that finalize-dist.mjs writes, plus two pages
+ * under /oss/ — so the crawl's resolution rules are pinned without a build.
+ */
+describe("check-links built dist crawl", () => {
+  const DIST_FILES: Record<string, string> = {
+    "_redirects": "/  /oss/  302\n",
+    "404.html": "<!doctype html><title>404</title>\n",
+    "oss/index.html":
+      '<a href="/oss/guide/">guide</a>\n<a href="/oss/guide/#install">install</a>\n<a href="/">root</a>\n',
+    "oss/guide/index.html": '<h2 id="install">Install</h2>\n',
+  };
+
+  function runDist(files: Record<string, string>, args: string[]) {
+    const root = mkdtempSync(join(tmpdir(), "check-links-dist-"));
+    scratch.push(root);
+    for (const [rel, body] of Object.entries(files)) {
+      mkdirSync(dirname(join(root, "dist", rel)), { recursive: true });
+      writeFileSync(join(root, "dist", rel), body);
+    }
+    const res = spawnSync(process.execPath, [SCRIPT, ...args], { cwd: root, encoding: "utf8" });
+    const errors = res.stdout
+      .split(/\r?\n/)
+      .filter((l) => l.startsWith("ERROR  "))
+      .map((l) => l.slice("ERROR  ".length));
+    return { status: res.status, stdout: res.stdout, stderr: res.stderr, errors };
+  }
+
+  it("passes when every built href and fragment resolves inside dist/", () => {
+    const { status, stdout, errors } = runDist(DIST_FILES, ["--dist", "dist", "--dist-only"]);
+    expect(errors).toEqual([]);
+    // Three hrefs: a page, a page#fragment and a _redirects source.
+    expect(stdout).toContain("checked 3 references — 0 broken, 0 warnings");
+    expect(status).toBe(0);
+  });
+
+  it("fails naming the file and line when a built route does not exist", () => {
+    const { status, errors } = runDist(
+      { ...DIST_FILES, "oss/index.html": '<a href="/oss/missing/">gone</a>\n' },
+      ["--dist", "dist", "--dist-only"],
+    );
+    expect(errors).toEqual(["/oss/missing/ (dist href, in oss/index.html#L1)"]);
+    expect(status).toBe(1);
+  });
+
+  it("fails on a fragment the built page does not expose", () => {
+    const { status, errors } = runDist(
+      { ...DIST_FILES, "oss/index.html": '<a href="/oss/guide/#nope">bad</a>\n' },
+      ["--dist", "dist", "--dist-only"],
+    );
+    expect(errors).toEqual(["/oss/guide/#nope (dist anchor, in oss/index.html#L1)"]);
+    expect(status).toBe(1);
+  });
+
+  it("rejects a root-relative href the base plugin failed to rewrite", () => {
+    const { status, errors } = runDist(
+      { ...DIST_FILES, "oss/index.html": '<a href="/guide/">no base</a>\n' },
+      ["--dist", "dist", "--dist-only"],
+    );
+    expect(errors).toEqual(["/guide/ (dist href, in oss/index.html#L1)"]);
+    expect(status).toBe(1);
+  });
+
+  it("requires --dist for --dist-only, and a value for --dist", () => {
+    const noDist = runDist(DIST_FILES, ["--dist-only"]);
+    expect(noDist.status).toBe(2);
+    expect(noDist.stderr).toContain("--dist-only needs --dist");
+    const dangling = runDist(DIST_FILES, ["--dist"]);
+    expect(dangling.status).toBe(2);
+    expect(dangling.stderr).toContain("--dist needs a built-dist directory");
+  });
+});
