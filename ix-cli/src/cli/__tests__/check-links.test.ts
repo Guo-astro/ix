@@ -247,6 +247,24 @@ describe("check-links built dist crawl", () => {
     expect(dangling.stderr).toContain("--dist needs a built-dist directory");
   });
 
+  // A walk that finds no page has checked nothing, and must not report clean.
+  // Before this guard an empty build printed `checked 0 references — 0 broken`
+  // and exited 0, so "the build emitted nothing" looked exactly like "the build
+  // is clean". The fixture keeps a `_redirects` and an asset, so it is a real
+  // tree with content — just no HTML to crawl.
+  it("fails when the built tree holds no HTML pages", () => {
+    const { status, stdout, errors } = runDist(
+      { "_redirects": "/  /oss/  302\n", "oss/_astro/app.css": "body{}\n" },
+      ["--dist", "dist", "--dist-only"],
+    );
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("dist crawl failed");
+    expect(errors[0]).toContain("no .html files found");
+    expect(errors[0]).toContain("the walk was empty");
+    expect(stdout).toContain("checked 0 references — 1 broken, 0 warnings");
+    expect(status).toBe(1);
+  });
+
   // --dist-only exists so the docs-site CI job reports on what ships. A tracked
   // source link the repo's own `links` job already fails must not fail the build
   // step too, so the scoped run has to ignore the tracked tree entirely. The

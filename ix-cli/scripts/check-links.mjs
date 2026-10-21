@@ -597,6 +597,13 @@ if (distArg) {
       }
     };
     walkDist(distRoot);
+    // A walk that finds no page cannot have checked anything. Without this, an
+    // empty or missing build reports `checked 0 references — 0 broken` and exits
+    // 0, which is indistinguishable from a build that is clean — the one false
+    // green a gate that exists to read the output cannot afford.
+    if (![...distFiles].some((rel) => rel.endsWith('.html'))) {
+      throw new Error(`no .html files found (${distEntries} entries) — the walk was empty, so nothing was checked`);
+    }
   } catch (e) {
     errors.push(`dist crawl failed (${distRoot}): ${e.message}`);
   }
