@@ -129,6 +129,20 @@ surfaces (#575).
   in stable (path, line, id) order, and also selects among the candidates of a
   resolution notice (a target that resolved by choosing among equal matches;
   only the true ties are listed and numbered).
+- **`--all` answers an ambiguous name for every candidate** (`callers`,
+  `callees`, `impact`), instead of exiting 2 with the candidate list. Each row
+  (or, for `impact`, each analysis) carries `candidate=<n>`, numbering the
+  `candidate` records printed with it. It covers the tied candidates the name
+  search returned, not only the 8 an ambiguity lists (numbered as `--pick`
+  numbers them; an import of the name is skipped when a definition is listed
+  too), up to 25 per call, so narrow with `--kind`
+  or `--path` for a common name; a `candidates_truncated` diagnostic says when
+  the cap or the search cut it off. `--pick` takes precedence over it.
+- **Exit codes** for the graph commands: `0` results, `2` ambiguous
+  (candidates listed), `3` not found (suggestions and a reason when known),
+  `4` workspace not mapped, `1` any other error. `IX_LEGACY_EXIT_CODES=1` makes
+  every non-zero exit `1` again. With several targets (`ix locate a b c`) the
+  run exits with the worst target's code and each group carries its own.
 - **`--no-recursive` and `--no-open` negate a default-on behaviour**, so their
   Default of `on` is the positive behaviour, and passing the flag turns it off.
 
@@ -165,6 +179,7 @@ Show methods/functions called by the given symbol (cross-file).
 | `--kind` | `<kind>` | — | Filter target entity by kind |
 | `--path` | `<path>` | — | Restrict to symbols from files matching this path substring |
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
+| `--all` | — | off | When the symbol is ambiguous, answer for every candidate; rows are tagged with their candidate |
 | `--limit` | `<n>` | `50` | Max results to show |
 | `--offset` | `<n>` | `0` | Skip the first N results (use the next: hint to page) |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
@@ -172,15 +187,17 @@ Show methods/functions called by the given symbol (cross-file).
 | `--quiet` | — | off | Drop headers, section titles and advisory hints |
 | `--fields` | `<list>` | — | Keep only these fields on each row, in this order (e.g. `name,path,lines`) |
 
-### `ix callers <symbol>`
+### `ix callers <symbols...>`
 
-Show methods/functions that call the given symbol (cross-file).
+Show methods/functions that call the given symbols (cross-file). Several
+symbols answer in one call, grouped per symbol.
 
 | Flag | Value | Default | Effect |
 |---|---|---|---|
 | `--kind` | `<kind>` | — | Filter target entity by kind |
 | `--path` | `<path>` | — | Restrict to symbols from files matching this path substring |
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
+| `--all` | — | off | When the symbol is ambiguous, answer for every candidate; rows are tagged with their candidate |
 | `--limit` | `<n>` | `50` | Max results to show |
 | `--offset` | `<n>` | `0` | Skip the first N results (use the next: hint to page) |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
@@ -451,6 +468,7 @@ System risk analysis — what behavior is at risk if this changes.
 | `--kind` | `<kind>` | — | Filter target entity by kind |
 | `--path` | `<path>` | — | Restrict to symbols from files matching this path substring |
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
+| `--all` | — | off | When the target is ambiguous, analyse every candidate; each analysis is tagged with its candidate |
 | `--depth` | `<n>` | `1` | Expansion depth for callers/importers (default 1, max 3) |
 | `--limit` | `<n>` | `10` | Max top-impacted members to show |
 | `--format` | `text\|json\|llm` | `text` | Output format — see [output-formats.md](output-formats.md) |
@@ -533,9 +551,10 @@ List entities by kind with optional path scoping.
 | `--quiet` | — | off | Drop headers, section titles and advisory hints |
 | `--fields` | `<list>` | — | Keep only these fields on each row, in this order (e.g. `name,path,lines`) |
 
-### `ix locate <symbol>`
+### `ix locate <symbols...>`
 
-Resolve a symbol to its position in the codebase and system hierarchy.
+Resolve symbols to their position in the codebase and system hierarchy.
+Several symbols answer in one call, grouped per symbol.
 
 | Flag | Value | Default | Effect |
 |---|---|---|---|
@@ -676,6 +695,10 @@ Read raw file content, line ranges, or symbol source code.
 | `--pick` | `<n>` | — | Pick Nth candidate from ambiguous results (1-based) |
 | `--root` | `<dir>` | — | Workspace root directory |
 | `--all` | — | off | Read the whole file or symbol, past the 400-line default cap |
+
+An ambiguous file or symbol name exits 0 with an `ambiguous` record and its
+candidates (unlike the graph commands' exit 2); retry with `--pick <n>` or
+`--path`. A miss exits 3.
 
 ### `ix reset`
 
