@@ -246,4 +246,24 @@ describe("check-links built dist crawl", () => {
     expect(dangling.status).toBe(2);
     expect(dangling.stderr).toContain("--dist needs a built-dist directory");
   });
+
+  // --dist-only exists so the docs-site CI job reports on what ships. A tracked
+  // source link the repo's own `links` job already fails must not fail the build
+  // step too, so the scoped run has to ignore the tracked tree entirely. The
+  // second half of the test proves the fixture would fail without the flag, so
+  // the first half cannot pass vacuously.
+  it("scopes --dist-only to the build, so a dead tracked source link cannot fail it", () => {
+    const files = {
+      "docs/a.md": "[dead](nowhere.md)\n",
+      "dist/oss/index.html": '<a href="/oss/">fine</a>\n',
+    };
+    const scoped = run(files, ["--dist", "dist", "--dist-only", "--offline"]);
+    expect(scoped.errors).toEqual([]);
+    expect(scoped.stdout).toContain("checked 1 references — 0 broken, 0 warnings");
+    expect(scoped.status).toBe(0);
+
+    const unscoped = run(files);
+    expect(unscoped.errors).toEqual(["nowhere.md (relative, in docs/a.md)"]);
+    expect(unscoped.status).toBe(1);
+  });
 });
