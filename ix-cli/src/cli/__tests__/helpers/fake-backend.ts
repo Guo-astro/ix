@@ -21,6 +21,12 @@ function planMismatchBody(ids: string[]): Record<string, unknown> {
   };
 }
 
+/** One live edge as a `graphSignature` line. */
+function edgeLine(id: string, e: { src: unknown; dst: unknown; predicate: unknown; attrs?: unknown }): string {
+  const attrs = (e.attrs ?? {}) as { tier?: unknown; confidence?: unknown };
+  return `${id} ${String(e.src)} ${String(e.dst)} ${String(e.predicate)} tier=${String(attrs.tier)} confidence=${String(attrs.confidence)}`;
+}
+
 /** A backend that answers the endpoints an ingest touches, and records them. */
 export class FakeBackend {
   readonly requests: Array<{ path: string; patches: number; code?: number }> = [];
@@ -210,7 +216,7 @@ export class FakeBackend {
   releaseVersion: string | null | undefined = undefined;
   private readonly nodes = new Map<string, { kind: unknown; name: unknown; attrs?: unknown; uri?: string; hash?: string; extractor?: string; live: boolean }>();
   private readonly edges = new Map<string, {
-    src: unknown; dst: unknown; predicate: unknown; workspaceId: string; uri: string; live: boolean;
+    src: unknown; dst: unknown; predicate: unknown; attrs?: unknown; workspaceId: string; uri: string; live: boolean;
   }>();
   /** Every committed patch by id, with the rev it last landed at. */
   private readonly stored = new Map<string, {
@@ -226,15 +232,22 @@ export class FakeBackend {
 
   /**
    * The live graph as a sorted, comparable list: nodes as `id kind name`,
-   * edges as `id src dst predicate`. Two backends hold the same graph exactly
-   * when their signatures are equal.
+   * edges as `id src dst predicate tier=<tier> confidence=<confidence>`. The
+   * resolution attrs are part of the line because an edge can be upgraded in
+   * place (same id, new tier). Two backends hold the same graph exactly when
+   * their signatures are equal.
    */
   graphSignature(): { nodes: string[]; edges: string[] } {
     const nodes = [...this.nodes].filter(([, n]) => n.live)
       .map(([id, n]) => `${id} ${String(n.kind)} ${String(n.name)}`).sort();
-    const edges = [...this.edges].filter(([, e]) => e.live)
-      .map(([id, e]) => `${id} ${String(e.src)} ${String(e.dst)} ${String(e.predicate)}`).sort();
+    const edges = [...this.edges].filter(([, e]) => e.live).map(([id, e]) => edgeLine(id, e)).sort();
     return { nodes, edges };
+  }
+
+  /** Live edges whose `tier` attr is `tier`, as `graphSignature` lines. */
+  edgesOfTier(tier: string): string[] {
+    return [...this.edges].filter(([, e]) => e.live && (e.attrs as { tier?: unknown } | undefined)?.tier === tier)
+      .map(([id, e]) => edgeLine(id, e)).sort();
   }
 
   /** Names of the live nodes, to make a signature diff readable. */
@@ -289,7 +302,7 @@ export class FakeBackend {
         this.nodes.set(id, { kind: op.kind, name: op.name, attrs: op.attrs, uri, hash: patch.source?.sourceHash, extractor: patch.source?.extractor, live: true });
       }
       else if (op.type === "UpsertEdge") {
-        this.edges.set(id, { src: op.src, dst: op.dst, predicate: op.predicate, workspaceId, uri, live: true });
+        this.edges.set(id, { src: op.src, dst: op.dst, predicate: op.predicate, attrs: op.attrs, workspaceId, uri, live: true });
       }
     }
     if (patch.patchId === undefined) return;
