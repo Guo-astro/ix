@@ -20,6 +20,7 @@ import { getEffectiveSystemPath, hasMapData } from "../hierarchy.js";
 import { humanizeLabel } from "../impact/risk-semantics.js";
 import { renderSection, renderKeyValue, renderNote, renderWarning, renderBreadcrumb, reportAmbiguousTarget, reportResolutionNotices } from "../ui.js";
 import { forMcp } from "../next-step.js";
+import { ensureFreshMap } from "../map-freshness.js";
 
 const CONTAINER_KINDS = new Set(["class", "module", "file", "trait", "object", "interface"]);
 const FILE_KINDS = new Set(["file"]);
@@ -63,7 +64,12 @@ Several symbols answer in one call, grouped per symbol (json: {targets: [...]}).
 ${EXIT_CODES_HELP}`)
     .action(async (symbols: string[], opts: { kind?: string; path?: string; pick?: number; format: string }) => {
       const client = createClient();
-      await runPerTarget(symbols, opts.format, (symbol) => locateOne(client, symbol, opts));
+      // An `ix map` after an edit may have left the map for the system paths
+      // read below (CL-13). Checked once per call, on the first target that
+      // resolves, so several targets print at most one stale-map notice.
+      let mapChecked: Promise<unknown> | undefined;
+      const freshMap = (): Promise<unknown> => (mapChecked ??= ensureFreshMap());
+      await runPerTarget(symbols, opts.format, (symbol) => locateOne(client, symbol, opts, freshMap));
     });
 }
 
@@ -71,6 +77,7 @@ async function locateOne(
   client: IxClient,
   symbol: string,
   opts: { kind?: string; path?: string; pick?: number; format: string },
+  freshMap: () => Promise<unknown>,
 ): Promise<void> {
   const diagnostics: string[] = [];
 
@@ -119,6 +126,9 @@ async function locateOne(
 
   const isContainer = CONTAINER_KINDS.has(target.kind);
   const isFile = FILE_KINDS.has(target.kind);
+
+  // Never throws and never moves the exit code.
+  await freshMap();
 
   // Parallel fetch: effective system path, parent container (for non-containers), entity details
   const [systemPath, containsResult, details] = await Promise.all([
