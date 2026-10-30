@@ -87,6 +87,14 @@ function isSharedRead(path: string): boolean {
   return SHARED_READ_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
+/** Rejects with the signal's reason once it aborts. */
+function untilAborted(signal: AbortSignal): Promise<never> {
+  return new Promise((_resolve, reject) => {
+    if (signal.aborted) reject(signal.reason);
+    else signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
+}
+
 export class IxClient {
   private readonly memo?: RequestMemo<SuccessBody>;
   private readonly limiter?: Limiter;
@@ -211,7 +219,7 @@ export class IxClient {
 
   async search(
     term: string,
-    opts?: { limit?: number; kind?: string; language?: string; asOfRev?: number; nameOnly?: boolean; workspaceId?: string; systemId?: string; scope?: string }
+    opts?: { limit?: number; kind?: string; language?: string; asOfRev?: number; nameOnly?: boolean; workspaceId?: string; systemId?: string; scope?: string; signal?: AbortSignal }
   ): Promise<GraphNode[]> {
     return this.post("/v1/search", {
       term,
@@ -227,7 +235,7 @@ export class IxClient {
       // request with a derived circe decoder and drop the unknown field, so
       // sending it is always safe; callers keep their own filter as well.
       scope: opts?.scope,
-    });
+    }, { signal: opts?.signal });
   }
 
   // Vector-similarity search. The backend (POST /v1/search/semantic) embeds the
@@ -296,7 +304,7 @@ export class IxClient {
       direction: opts?.direction ?? "both",
       predicates: opts?.predicates,
       kinds: opts?.kinds,
-    }, opts?.timeoutMs);
+    }, { timeoutMs: opts?.timeoutMs });
   }
 
   async expand(
@@ -805,9 +813,13 @@ export class IxClient {
     return this.token !== undefined;
   }
 
-  private async post<T>(path: string, body: unknown, timeoutMs = 2 * 60 * 1000): Promise<T> {
+  private async post<T>(
+    path: string, body: unknown, opts?: { timeoutMs?: number; signal?: AbortSignal },
+  ): Promise<T> {
+    const timeoutMs = opts?.timeoutMs ?? 2 * 60 * 1000;
+    const signal = opts?.signal;
     const payload = JSON.stringify(body);
-    return this.read<T>("POST", path, payload, () =>
+    const send = () =>
       fetch(`${this.endpoint}${path}`, {
         method: "POST",
         headers: this.headers(true, "POST", path),
@@ -817,8 +829,27 @@ export class IxClient {
         // 2 min per request unless the caller bounds it, also bounded by the
         // shared deadline when set, and by the read deadline when this POST is
         // a read.
-        signal: this.signalFor(timeoutMs, isSharedRead(path)),
-      }));
+        signal: signal ? AbortSignal.any([signal, this.signalFor(timeoutMs, isSharedRead(path))])
+          : this.signalFor(timeoutMs, isSharedRead(path)),
+      });
+    if (signal) {
+      // Optional probes own their cancellation: no shared memo or retry may
+      // outlive their budget or cancel another caller's ordinary search. They
+      // still count against the in-flight limit; one cancelled while it waits
+      // for a slot rejects at once and, given the slot later, sends nothing.
+      signal.throwIfAborted();
+      const run = async (): Promise<SuccessBody> => {
+        signal.throwIfAborted();
+        const response = await send();
+        const text = await response.text();
+        if (!response.ok) throw httpError(response.status, text);
+        return { status: response.status, text };
+      };
+      const queued = this.limiter ? this.limiter.run(run) : run();
+      queued.catch(() => {});
+      return parseOrThrowWithStatus<T>(await Promise.race([queued, untilAborted(signal)]));
+    }
+    return this.read<T>("POST", path, payload, send);
   }
 
   private async get<T>(path: string, timeoutMs = 2 * 60 * 1000): Promise<T> {

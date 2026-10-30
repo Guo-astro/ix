@@ -109,6 +109,25 @@ which value it ignored, on stderr, when a person is there to read it.
   the filter. Any miss may carry
   `suggestion` records with the nearest names in the graph (`locate` included),
   and a miss on an empty or degraded graph carries a `graph` record saying so.
+  `locate`, `callers`, `impact` and `explain` also add a JSON `didYouMean` array
+  (at most five `{name, kind, path, line}` objects; unknown locations are `null`).
+  It is a separate field from an ambiguity's `candidates`, which keeps its meaning.
+  Existing error fields, suggestion row shapes (llm `suggestion` rows keep `id=`)
+  and exit codes are preserved. Text prints “Did you mean” from the suggestions,
+  unchanged and first, topped up to five from `didYouMean`; text and llm include an
+  `ix <command> ... --path ...` retry when one name clearly scores best, every
+  probe answered in time, and the suggestion rows list that name. These
+  names never select a target.
+  Ranking prefers case-insensitive exact names, the last qualified segment,
+  snake/camel normalization, prefix/suffix matches, then edit distance at most two.
+  File misses use basename and workspace-relative path suffix matches.
+  The probe sends at most seven name-index requests (never an empty term) and
+  reads at most 256 rows, with names bounded to 128 characters. All requests
+  share a deadline of half the elapsed miss time, capped at 100 ms; timed-out
+  probes are cancelled without retries. On a slow backend `didYouMean` can
+  therefore be empty; the suggestions do not depend on that deadline and are
+  the same as without the probe. `--no-suggest` skips both and returns
+  `didYouMean: []`.
   A graph read from a directory no registered workspace covers is
   `workspace_not_mapped`, with `dir=` and a `hint=` naming the command that
   maps it.
